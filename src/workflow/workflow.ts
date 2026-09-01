@@ -1,7 +1,7 @@
 import { CardParseError, contractFromCard } from "./contractFromCard.js";
-import { runCodingAgent } from "./runCodingAgent.js";
-import { commentOnCard, getCard, getListIdByName, moveCard } from "./trelloClient.js";
-import { config } from "./config.js";
+import { runCodingAgent } from "../codingAgent/runCodingAgent.js";
+import { commentOnCard, getCard, getListIdByName, moveCard } from "../trello/client.js";
+import { config } from "../config.js";
 import { isUnderWipLimit } from "./wip.js";
 
 // Simple in-memory FIFO for cards that arrived while WIP was full. Not persisted

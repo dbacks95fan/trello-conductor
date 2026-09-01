@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stringify } from "yaml";
-import { config } from "./config.js";
-import type { WorkContract } from "./contractFromCard.js";
+import { config } from "../config.js";
+import type { WorkContract } from "../workflow/contractFromCard.js";
 
 export interface CodingAgentResult {
   exitCode: number | null;

@@ -1,8 +1,8 @@
 import express from "express";
 import { config, webhookUrl } from "./config.js";
-import { ensureWebhook, getListIdByName, resolveBoardId } from "./trelloClient.js";
-import { verifyTrelloSignature } from "./webhookVerify.js";
-import { handleCardReadyForAgent } from "./workflow.js";
+import { ensureWebhook, getListIdByName, resolveBoardId } from "./trello/client.js";
+import { verifyTrelloSignature } from "./trello/webhookVerify.js";
+import { handleCardReadyForAgent } from "./workflow/workflow.js";
 
 const app = express();
 

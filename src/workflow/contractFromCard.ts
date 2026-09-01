@@ -1,4 +1,4 @@
-import type { TrelloCard } from "./trelloClient.js";
+import type { TrelloCard } from "../trello/client.js";
 
 export interface WorkContract {
   work_item: string;

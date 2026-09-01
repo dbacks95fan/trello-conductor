@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { config, webhookUrl } from "./config.js";
+import { config, webhookUrl } from "../config.js";
 
 /**
  * Trello signs webhook deliveries as base64(HMAC-SHA1(rawBody + callbackURL, apiSecret)),

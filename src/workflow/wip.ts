@@ -1,5 +1,5 @@
-import { config } from "./config.js";
-import { getCardsInList, getListIdByName } from "./trelloClient.js";
+import { config } from "../config.js";
+import { getCardsInList, getListIdByName } from "../trello/client.js";
 
 /** WIP limits to prevent AI from overwhelming human decision capacity — the
  *  orchestrator refuses to start new work if the "Agent Working" list is already

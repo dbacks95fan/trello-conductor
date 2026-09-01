@@ -1,4 +1,4 @@
-import { config } from "./config.js";
+import { config } from "../config.js";
 
 const BASE = "https://api.trello.com/1";
 

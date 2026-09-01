@@ -10,25 +10,49 @@ The orchestrator — not Claude — owns all Trello reads and writes. It calls t
 Trello REST API directly with a key/token/secret; the Coding Agent it invokes
 has no Trello access at all.
 
+## Structure
+
+```
+src/
+├── server.ts                    Express app: webhook endpoint, startup/registration
+├── config.ts                    env var loading + the shared webhookUrl constant
+├── trello/
+│   ├── client.ts                thin Trello REST API wrapper (lists, cards, comments, webhooks)
+│   └── webhookVerify.ts         HMAC signature check on incoming deliveries
+├── workflow/
+│   ├── workflow.ts              the queue + per-card state machine
+│   ├── wip.ts                   WIP limit check against TRELLO_LIST_WORKING
+│   └── contractFromCard.ts      deterministic card-description -> Work Contract parser
+└── codingAgent/
+    └── runCodingAgent.ts        spawns the coding-agent CLI as a subprocess
+```
+
+Grouped by concern rather than kept flat: `trello/` is everything that talks to
+Trello's API, `workflow/` is the orchestration logic that doesn't care which
+task-tracker it came from, `codingAgent/` is the one integration point with the
+tool it invokes.
+
 ## What it does, step by step
 
 1. Trello POSTs an `updateCard` webhook event whenever anything on the board
    changes.
-2. `src/webhookVerify.ts` checks the `X-Trello-Webhook` HMAC signature against
-   the raw request body — deliveries that don't verify are rejected with 401
-   and never reach the workflow logic.
+2. `src/trello/webhookVerify.ts` checks the `X-Trello-Webhook` HMAC signature
+   against the raw request body — deliveries that don't verify are rejected
+   with 401 and never reach the workflow logic.
 3. If the event says a card moved into `TRELLO_LIST_READY`, the card is queued
-   (`src/workflow.ts`).
+   (`src/workflow/workflow.ts`).
 4. The queue drains one card at a time, gated by `WIP_LIMIT` cards currently in
-   `TRELLO_LIST_WORKING` (`src/wip.ts`) — if full, the card waits in memory and
-   is picked up as soon as a slot frees.
-5. `src/contractFromCard.ts` deterministically parses the card's description
-   (the USER STORY / ACCEPTANCE CRITERIA / PLAYWRIGHT TEST CASES / DEFINITION OF
-   DONE convention already used on this board) into a Work Contract. This is
-   pattern-matching, not judgment — if the expected structure isn't there, it
-   throws rather than inventing acceptance criteria, and the card is left in
-   place with a comment explaining what's missing.
-6. The card moves to `TRELLO_LIST_WORKING`, and `src/runCodingAgent.ts` spawns
+   `TRELLO_LIST_WORKING` (`src/workflow/wip.ts`) — if full, the card waits in
+   memory and is picked up as soon as a slot frees.
+5. `src/workflow/contractFromCard.ts` deterministically parses the card's
+   description (the USER STORY / ACCEPTANCE CRITERIA / PLAYWRIGHT (TEST CASES) /
+   DONE (DEFINITION OF DONE) convention used on this board, with some heading
+   aliases tolerated) into a Work Contract. This is pattern-matching, not
+   judgment — if the expected structure isn't there, it throws rather than
+   inventing acceptance criteria, and the card is left in place with a comment
+   explaining what's missing.
+6. The card moves to `TRELLO_LIST_WORKING`, and
+   `src/codingAgent/runCodingAgent.ts` spawns
    `coding-agent run --contract <generated.yaml> --repo <TARGET_REPO>` exactly
    as documented in that tool's own README — no special integration.
 7. Whatever the result (`candidate_complete`, `blocked`, `needs_decision`,
@@ -75,7 +99,10 @@ subscription — idempotent, safe to restart.
   when the orchestrator restarts will not be picked up automatically — move it
   out and back into the list to re-trigger the webhook, or wait for a future
   periodic-sweep fallback (not built yet).
-- **The card-description parser is intentionally rigid.** It expects the exact
-  section-heading convention already used on this board. It is not the Codex
-  Planner — it does not use judgment, only pattern-matches structure a human
-  already wrote.
+- **The card-description parser is deliberately non-judgmental, not
+  general-purpose.** It tolerates a handful of known heading aliases (see
+  `SECTION_ALIASES` in `contractFromCard.ts`) and refuses to let an
+  unrecognized heading's content leak into a recognized section, but it is
+  still pattern-matching, not the Codex Planner — a genuinely novel section
+  structure will fail loudly rather than being silently misparsed or guessed
+  at.
