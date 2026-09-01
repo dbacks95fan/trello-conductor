@@ -22,7 +22,7 @@ async function drainQueue(): Promise<void> {
   try {
     while (pendingQueue.length > 0) {
       if (!(await isUnderWipLimit())) {
-        console.log(`[orchestrator] WIP limit reached (${config.wipLimit}); ${pendingQueue.length} card(s) queued.`);
+        console.log(`[trello-conductor] WIP limit reached (${config.wipLimit}); ${pendingQueue.length} card(s) queued.`);
         return;
       }
       const cardId = pendingQueue.shift()!;
@@ -35,7 +35,7 @@ async function drainQueue(): Promise<void> {
 
 async function processCard(cardId: string): Promise<void> {
   const card = await getCard(cardId);
-  console.log(`[orchestrator] Processing card ${card.idShort} "${card.name}"`);
+  console.log(`[trello-conductor] Processing card ${card.idShort} "${card.name}"`);
 
   let contract;
   try {
@@ -44,7 +44,7 @@ async function processCard(cardId: string): Promise<void> {
     if (err instanceof CardParseError) {
       await commentOnCard(
         cardId,
-        `⚠️ Orchestrator could not build a Work Contract from this card and is leaving it in place:\n\n${err.message}\n\nFix the card description (needs a USER STORY section and at least one ACCEPTANCE CRITERIA bullet) and move it back to "${config.listReady}" to retry.`,
+        `⚠️ Trello Conductor could not build a Work Contract from this card and is leaving it in place:\n\n${err.message}\n\nFix the card description (needs a USER STORY section and at least one ACCEPTANCE CRITERIA bullet) and move it back to "${config.listReady}" to retry.`,
       );
       return;
     }
@@ -95,10 +95,10 @@ async function processCard(cardId: string): Promise<void> {
     comment += `\n\nValidation — ${gateSummary}`;
   }
 
-  comment += `\n\nEvidence saved at \`.agent/evidence/${contract.work_item}-${result.evidence.runId}.json\` in the repo. This card requires human review — the orchestrator never moves a card to Done.`;
+  comment += `\n\nEvidence saved at \`.agent/evidence/${contract.work_item}-${result.evidence.runId}.json\` in the repo. This card requires human review — Trello Conductor never moves a card to Done.`;
 
   await commentOnCard(cardId, comment);
-  console.log(`[orchestrator] Card ${card.idShort} -> Agent Review (${status})`);
+  console.log(`[trello-conductor] Card ${card.idShort} -> Agent Review (${status})`);
 }
 
 /** Called on every webhook delivery indicating a card entered TRELLO_LIST_READY. */

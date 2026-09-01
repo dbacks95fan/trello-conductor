@@ -1,12 +1,12 @@
-# orchestrator (v0.1)
+# Trello Conductor (v0.1)
 
-Trello-webhook-driven Orchestrator for the experimental Agentic SDLC. Watches one
-Trello list ("Ready for Agent"), and when a card moves into it: validates the
-event came from Trello, builds a Work Contract from the card, enforces a WIP
-limit, invokes the [coding-agent](https://github.com/dbacks95fan/coding-agent)
+Trello-webhook-driven orchestrator for the experimental Agentic SDLC. Watches
+one Trello list ("Ready for Agent"), and when a card moves into it: validates
+the event came from Trello, builds a Work Contract from the card, enforces a
+WIP limit, invokes the [coding-agent](https://github.com/dbacks95fan/coding-agent)
 CLI, and updates the card's list + comments based on the result.
 
-The orchestrator — not Claude — owns all Trello reads and writes. It calls the
+Trello Conductor — not Claude — owns all Trello reads and writes. It calls the
 Trello REST API directly with a key/token/secret; the Coding Agent it invokes
 has no Trello access at all.
 
@@ -58,7 +58,7 @@ tool it invokes.
 7. Whatever the result (`candidate_complete`, `blocked`, `needs_decision`,
    `failed`, or no parseable output at all), the card moves to
    `TRELLO_LIST_REVIEW` with a comment summarizing the outcome and validation
-   gate results. **The orchestrator never moves a card to Done** — that's a
+   gate results. **Trello Conductor never moves a card to Done** — that's a
    human decision, always.
 
 ## Setup
@@ -96,9 +96,9 @@ subscription — idempotent, safe to restart.
   Trello (harmless, just unused) until manually cleaned up. A named tunnel with
   a real domain would fix this; out of scope for now.
 - **The WIP queue is in-memory only.** A card sitting in `Ready for Agent`
-  when the orchestrator restarts will not be picked up automatically — move it
-  out and back into the list to re-trigger the webhook, or wait for a future
-  periodic-sweep fallback (not built yet).
+  when Trello Conductor restarts will not be picked up automatically — move
+  it out and back into the list to re-trigger the webhook, or wait for a
+  future periodic-sweep fallback (not built yet).
 - **The card-description parser is deliberately non-judgmental, not
   general-purpose.** It tolerates a handful of known heading aliases (see
   `SECTION_ALIASES` in `contractFromCard.ts`) and refuses to let an

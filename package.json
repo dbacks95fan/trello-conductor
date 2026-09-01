@@ -1,7 +1,7 @@
 {
-  "name": "orchestrator",
+  "name": "trello-conductor",
   "version": "0.1.0",
-  "description": "Trello-webhook-driven Orchestrator: detects Ready-for-Agent cards, invokes the Coding Agent, updates Trello workflow state.",
+  "description": "Trello Conductor: Trello-webhook-driven orchestrator that detects Ready-for-Agent cards, invokes the Coding Agent, and updates Trello workflow state.",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",

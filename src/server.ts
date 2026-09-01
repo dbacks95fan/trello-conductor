@@ -25,7 +25,7 @@ app.post("/webhooks/trello", async (req, res) => {
   const signature = req.header("X-Trello-Webhook");
 
   if (!verifyTrelloSignature(rawBody, signature)) {
-    console.warn("[orchestrator] Rejected webhook delivery: invalid signature.");
+    console.warn("[trello-conductor] Rejected webhook delivery: invalid signature.");
     res.sendStatus(401);
     return;
   }
@@ -38,7 +38,7 @@ app.post("/webhooks/trello", async (req, res) => {
   try {
     payload = JSON.parse(rawBody.toString("utf8"));
   } catch {
-    console.warn("[orchestrator] Webhook body was not valid JSON.");
+    console.warn("[trello-conductor] Webhook body was not valid JSON.");
     return;
   }
 
@@ -50,7 +50,7 @@ app.post("/webhooks/trello", async (req, res) => {
   const cardId = data.card?.id;
 
   if (movedIntoReady && cardId) {
-    console.log(`[orchestrator] Card ${cardId} moved into "${config.listReady}".`);
+    console.log(`[trello-conductor] Card ${cardId} moved into "${config.listReady}".`);
     handleCardReadyForAgent(cardId);
   }
 });
@@ -68,17 +68,17 @@ async function main() {
   // a port nothing is serving yet.
   await new Promise<void>((resolvePromise) => {
     app.listen(config.port, () => {
-      console.log(`[orchestrator] listening on :${config.port}`);
+      console.log(`[trello-conductor] listening on :${config.port}`);
       resolvePromise();
     });
   });
 
   const boardRealId = await resolveBoardId();
   const webhook = await ensureWebhook(webhookUrl, boardRealId);
-  console.log(`[orchestrator] Webhook active: ${webhook.id} -> ${webhook.callbackURL}`);
+  console.log(`[trello-conductor] Webhook active: ${webhook.id} -> ${webhook.callbackURL}`);
 }
 
 main().catch((err) => {
-  console.error("[orchestrator] failed to start:", err);
+  console.error("[trello-conductor] failed to start:", err);
   process.exit(1);
 });

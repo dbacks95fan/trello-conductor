@@ -18,7 +18,7 @@ export interface CodingAgentResult {
  * just argv in, stdout JSON + exit code out.
  */
 export async function runCodingAgent(contract: WorkContract): Promise<CodingAgentResult> {
-  const dir = mkdtempSync(join(tmpdir(), "orchestrator-contract-"));
+  const dir = mkdtempSync(join(tmpdir(), "trello-conductor-contract-"));
   const contractPath = join(dir, `${contract.work_item}.yaml`);
   writeFileSync(contractPath, stringify(contract), "utf8");
 

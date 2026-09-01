@@ -34,7 +34,7 @@ export interface TrelloCard {
 let listCache: TrelloList[] | null = null;
 
 /** Lists are looked up by name at call time (cached briefly) rather than hardcoded IDs,
- *  so renaming/recreating lists in Trello doesn't require redeploying the orchestrator. */
+ *  so renaming/recreating lists in Trello doesn't require redeploying Trello Conductor. */
 export async function getLists(forceRefresh = false): Promise<TrelloList[]> {
   if (listCache && !forceRefresh) return listCache;
   listCache = await trelloFetch<TrelloList[]>(`/boards/${config.boardId}/lists`);
@@ -105,7 +105,7 @@ export async function createWebhook(callbackURL: string, idModel: string): Promi
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      description: "orchestrator: Ready for Agent watcher",
+      description: "Trello Conductor: Ready for Agent watcher",
       callbackURL,
       idModel,
     }),
