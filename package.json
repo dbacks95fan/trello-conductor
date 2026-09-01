@@ -1,0 +1,27 @@
+{
+  "name": "orchestrator",
+  "version": "0.1.0",
+  "description": "Trello-webhook-driven Orchestrator: detects Ready-for-Agent cards, invokes the Coding Agent, updates Trello workflow state.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "dev": "tsx src/server.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.4.0",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3"
+  }
+}
