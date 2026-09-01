@@ -10,17 +10,14 @@ export interface CodingAgentResult {
   exitCode: number | null;
   evidence: Record<string, unknown> | null;
   rawOutput: string;
+  contractText: string;
 }
 
-/**
- * Runs the Coding Agent CLI as a child process, exactly as an external
- * Orchestrator is meant to per the tool's own README — no special integration,
- * just argv in, stdout JSON + exit code out.
- */
 export async function runCodingAgent(contract: WorkContract): Promise<CodingAgentResult> {
   const dir = mkdtempSync(join(tmpdir(), "trello-conductor-contract-"));
   const contractPath = join(dir, `${contract.work_item}.yaml`);
-  writeFileSync(contractPath, stringify(contract), "utf8");
+  const contractText = stringify(contract);
+  writeFileSync(contractPath, contractText, "utf8");
 
   return new Promise((resolvePromise) => {
     const child = spawn(
@@ -42,7 +39,7 @@ export async function runCodingAgent(contract: WorkContract): Promise<CodingAgen
       } catch {
         // stdout wasn't valid JSON — evidence stays null, rawOutput still returned for logging
       }
-      resolvePromise({ exitCode, evidence, rawOutput: stdout + stderr });
+      resolvePromise({ exitCode, evidence, rawOutput: stdout + stderr, contractText });
     });
   });
 }
