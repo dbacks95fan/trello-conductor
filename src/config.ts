@@ -15,6 +15,7 @@ export const config = {
   listWorking: process.env.TRELLO_LIST_WORKING ?? "Agent Working",
   listReview: process.env.TRELLO_LIST_REVIEW ?? "Agent Review",
   listHumanApproval: process.env.TRELLO_LIST_HUMAN_APPROVAL ?? "Human Approval",
+  listHumanDecision: process.env.TRELLO_LIST_HUMAN_DECISION ?? "Human Decision Required",
   wipLimit: Number(process.env.WIP_LIMIT ?? "1"),
   codingAgentCli: required("CODING_AGENT_CLI"),
   evaluatorAgentCli: required("EVALUATOR_AGENT_CLI"),

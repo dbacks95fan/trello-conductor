@@ -32,7 +32,7 @@ async function processCard(cardId: string): Promise<void> {
 
   let contract;
   try {
-    contract = contractFromCard(card);
+    contract = contractFromCard(card, config.targetRepo);
   } catch (err) {
     if (err instanceof CardParseError) {
       await commentOnCard(cardId, `⚠️ Trello Conductor could not build a Work Contract:\n\n${err.message}`);
@@ -88,6 +88,17 @@ async function processCard(cardId: string): Promise<void> {
       comment += `\n- ${finding.id ?? "finding"} [${finding.severity ?? "unknown"}]: ${finding.problem ?? "(no description)"}`;
     }
   }
+  const decisionBrief = evaluated.evaluation.decisionBrief as Record<string, unknown> | undefined;
+  if (status === "needs_decision" && decisionBrief) {
+    const facts = Array.isArray(decisionBrief.knownFacts) ? decisionBrief.knownFacts : [];
+    const inferences = Array.isArray(decisionBrief.evaluatorInferences) ? decisionBrief.evaluatorInferences : [];
+    const options = Array.isArray(decisionBrief.options) ? decisionBrief.options as Array<Record<string, unknown>> : [];
+    comment += `\n\n## Human Decision Required\n\n**Decision:** ${decisionBrief.decisionRequired ?? "Not provided"}\n\n**Why now:** ${decisionBrief.whyNow ?? "Not provided"}`;
+    if (facts.length) comment += `\n\n**Known facts**\n${facts.map((fact) => `- ${String(fact)}`).join("\n")}`;
+    if (inferences.length) comment += `\n\n**Evaluator inferences**\n${inferences.map((inference) => `- ${String(inference)}`).join("\n")}`;
+    if (options.length) comment += `\n\n**Options**\n${options.map((option) => `- ${String(option.option ?? "Option")}: ${String(option.impact ?? "Impact not provided")}`).join("\n")}`;
+    comment += `\n\n**If no decision is made:** ${decisionBrief.consequenceOfNoDecision ?? "Work remains blocked."}`;
+  }
   await commentOnCard(cardId, comment);
 
   if (status === "pass") {
@@ -97,9 +108,9 @@ async function processCard(cardId: string): Promise<void> {
   } else if (status === "fail") {
     await commentOnCard(cardId, "↩️ Independent evaluation failed. Findings require implementation rework. Card remains in Agent Review; automatic retry is intentionally not enabled in v0.1.");
   } else if (status === "needs_decision") {
-    const humanApprovalListId = await getListIdByName(config.listHumanApproval);
-    await moveCard(cardId, humanApprovalListId);
-    await commentOnCard(cardId, "❓ Evaluator requires human judgment before work can continue.");
+    const humanDecisionListId = await getListIdByName(config.listHumanDecision);
+    await moveCard(cardId, humanDecisionListId);
+    await commentOnCard(cardId, "❓ Evaluator requires human judgment. The decision brief above contains the evidence, options, and consequence of waiting.");
   } else {
     await commentOnCard(cardId, `⚠️ Unknown evaluator status \`${status}\`. Card remains in Agent Review.`);
   }

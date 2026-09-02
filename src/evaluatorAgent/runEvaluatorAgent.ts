@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse } from "yaml";
 import { config } from "../config.js";
 
 export interface EvaluatorAgentResult {
@@ -17,6 +18,9 @@ export async function runEvaluatorAgent(
   const workItem = String(evidence.workItem ?? "work-item");
   const worktree = evidence.worktree as { path?: string } | undefined;
   if (!worktree?.path) throw new Error("Coding Agent evidence does not include worktree.path");
+  const intentPath = parse(contractText)?.intent?.path;
+  if (typeof intentPath !== "string" || !intentPath) throw new Error("Work Contract does not contain a canonical intent path");
+  const candidateIntentPath = join(worktree.path, intentPath);
 
   const dir = mkdtempSync(join(tmpdir(), "trello-conductor-evaluation-"));
   const contractPath = join(dir, `${workItem}.yaml`);
@@ -27,7 +31,7 @@ export async function runEvaluatorAgent(
   return new Promise((resolvePromise) => {
     const child = spawn(
       "node",
-      [config.evaluatorAgentCli, "review", "--contract", contractPath, "--evidence", evidencePath, "--repo", worktree.path!],
+      [config.evaluatorAgentCli, "review", "--intent", candidateIntentPath, "--contract", contractPath, "--evidence", evidencePath, "--repo", worktree.path!],
       { env: process.env },
     );
 
