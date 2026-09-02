@@ -31,6 +31,11 @@ export interface TrelloCard {
   url: string;
 }
 
+export interface TrelloComment {
+  id: string;
+  data: { text?: string };
+}
+
 let listCache: TrelloList[] | null = null;
 
 /** Lists are looked up by name at call time (cached briefly) rather than hardcoded IDs,
@@ -67,6 +72,10 @@ export async function resolveBoardId(): Promise<string> {
 
 export async function getCard(cardId: string): Promise<TrelloCard> {
   return trelloFetch<TrelloCard>(`/cards/${cardId}`);
+}
+
+export async function getCardComments(cardId: string): Promise<TrelloComment[]> {
+  return trelloFetch<TrelloComment[]>(`/cards/${cardId}/actions?filter=commentCard&limit=100`);
 }
 
 export async function getCardsInList(listId: string): Promise<TrelloCard[]> {

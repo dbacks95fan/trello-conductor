@@ -2,7 +2,7 @@ import express from "express";
 import { config, webhookUrl } from "./config.js";
 import { ensureWebhook, getListIdByName, resolveBoardId } from "./trello/client.js";
 import { verifyTrelloSignature } from "./trello/webhookVerify.js";
-import { handleCardReadyForAgent } from "./workflow/workflow.js";
+import { handleCardReadyForAgent, handleCardReviewForAgent } from "./workflow/workflow.js";
 
 const app = express();
 
@@ -47,11 +47,15 @@ app.post("/webhooks/trello", async (req, res) => {
 
   const data = action.data as { listAfter?: { name?: string }; card?: { id?: string } };
   const movedIntoReady = data.listAfter?.name === config.listReady;
+  const movedIntoReview = data.listAfter?.name === config.listReview;
   const cardId = data.card?.id;
 
   if (movedIntoReady && cardId) {
     console.log(`[trello-conductor] Card ${cardId} moved into "${config.listReady}".`);
     handleCardReadyForAgent(cardId);
+  } else if (movedIntoReview && cardId) {
+    console.log(`[trello-conductor] Card ${cardId} moved into "${config.listReview}".`);
+    handleCardReviewForAgent(cardId);
   }
 });
 
