@@ -1,5 +1,9 @@
-// ABOUTME: Loads the Trello and remote evaluator configuration required by the orchestrator.
-import "dotenv/config";
+// ABOUTME: Loads repository configuration and user-level evaluator credentials for the orchestrator.
+import dotenv from "dotenv";
+import { defaultRuntimeSecretsFile } from "./runtimeConfig.js";
+
+dotenv.config({ path: process.env.ORCHESTRATOR_SECRETS_FILE ?? defaultRuntimeSecretsFile() });
+dotenv.config();
 
 function required(name: string): string {
   const value = process.env[name];
