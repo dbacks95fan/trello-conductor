@@ -10,6 +10,13 @@ Trello Conductor — not Claude — owns all Trello reads and writes. It calls t
 Trello REST API directly with a key/token/secret; the Coding Agent it invokes
 has no Trello access at all.
 
+The evaluator runs remotely on the NAS. When a candidate is complete, Trello
+Conductor verifies the candidate branch is clean, commits the Work Contract and
+evidence to that branch, pushes it, and records the immutable commit SHA in the
+card handoff comment. When the card enters Agent Review, the Evaluator checks
+out that SHA into temporary container storage, evaluates it, and removes the
+checkout before responding.
+
 ## Structure
 
 ```
@@ -55,7 +62,15 @@ tool it invokes.
    `src/codingAgent/runCodingAgent.ts` spawns
    `coding-agent run --contract <generated.yaml> --repo <TARGET_REPO>` exactly
    as documented in that tool's own README — no special integration.
-7. Whatever the result (`candidate_complete`, `blocked`, `needs_decision`,
+7. For a `candidate_complete` result, Trello Conductor records the Work Contract
+   and Evidence Package in the candidate branch, pushes the branch, and writes
+   the repository URL, commit SHA, and repository-relative artifact paths to
+   the evaluator handoff comment.
+8. When the card enters `TRELLO_LIST_REVIEW`, Trello Conductor calls the
+   authenticated `EVALUATOR_API_URL` endpoint. The evaluator validates the
+   allowed repository URL, checks out the supplied SHA into request-scoped
+   temporary storage, and returns its JSON result.
+9. Whatever the result (`candidate_complete`, `blocked`, `needs_decision`,
    `failed`, or no parseable output at all), the card moves to
    `TRELLO_LIST_REVIEW` with a comment summarizing the outcome and validation
    gate results. **Trello Conductor never moves a card to Done** — that's a
@@ -88,6 +103,13 @@ npm start
 On startup it resolves the board's real id, and calls Trello's webhook API to
 create (or reuse, if one already exists for this exact callback URL) the
 subscription — idempotent, safe to restart.
+
+Set `EVALUATOR_API_URL` to the NAS evaluator address and `EVALUATOR_API_TOKEN`
+to the same bearer token configured by the evaluator. The evaluator deployment
+must set `EVALUATOR_ALLOWED_REPOSITORY_URL` to the candidate repository’s HTTPS
+`origin` URL. If that repository is private, configure a read-only GitHub
+credential in the NAS runtime environment. Do not store credentials in this
+repository.
 
 ## Known limitations (v0.1, on purpose)
 

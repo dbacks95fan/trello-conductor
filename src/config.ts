@@ -1,3 +1,4 @@
+// ABOUTME: Loads the Trello and remote evaluator configuration required by the orchestrator.
 import "dotenv/config";
 
 function required(name: string): string {
@@ -18,7 +19,8 @@ export const config = {
   listHumanDecision: process.env.TRELLO_LIST_HUMAN_DECISION ?? "Human Decision Required",
   wipLimit: Number(process.env.WIP_LIMIT ?? "1"),
   codingAgentCli: required("CODING_AGENT_CLI"),
-  evaluatorAgentCli: required("EVALUATOR_AGENT_CLI"),
+  evaluatorApiUrl: required("EVALUATOR_API_URL"),
+  evaluatorApiToken: required("EVALUATOR_API_TOKEN"),
   targetRepo: required("TARGET_REPO"),
   callbackUrl: required("CALLBACK_URL"),
   port: Number(process.env.PORT ?? "8787"),

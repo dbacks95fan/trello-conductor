@@ -1,10 +1,11 @@
+// ABOUTME: Coordinates coding and remote evaluation transitions for Trello work items.
 import { CardParseError, contractFromCard } from "./contractFromCard.js";
 import { runCodingAgent } from "../codingAgent/runCodingAgent.js";
-import { runEvaluatorAgent } from "../evaluatorAgent/runEvaluatorAgent.js";
+import { prepareGitEvaluationHandoff } from "../evaluatorAgent/gitHandoff.js";
+import { runRemoteEvaluator } from "../evaluatorAgent/remote.js";
 import { commentOnCard, getCard, getListIdByName, moveCard } from "../trello/client.js";
 import { config } from "../config.js";
 import { isUnderWipLimit } from "./wip.js";
-import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stringify } from "yaml";
 
@@ -86,18 +87,27 @@ async function processCard(cardId: string): Promise<void> {
 
   const workItem = String(coding.evidence.workItem ?? contract.work_item);
   const runId = String(coding.evidence.runId ?? "");
+  const worktree = coding.evidence.worktree as { path?: string; branch?: string } | undefined;
   if (!runId) {
     await moveCard(cardId, reviewListId);
     await commentOnCard(cardId, "❌ Coding Agent did not provide a run ID. Independent evaluation cannot be started.");
     return;
   }
-  const contractRelativePath = `.agent/work/${workItem}/contract.yaml`;
-  const evidenceRelativePath = `.agent/evidence/${workItem}-${runId}.json`;
-  const contractAbsolutePath = join(config.targetRepo, contractRelativePath);
-  mkdirSync(join(config.targetRepo, ".agent", "work", workItem), { recursive: true });
-  writeFileSync(contractAbsolutePath, stringify(contract), "utf8");
-  const handoff = JSON.stringify({ contractPath: contractRelativePath, evidencePath: evidenceRelativePath, runId });
-  await commentOnCard(cardId, `${handoffMarker}${handoff} -->\n🔎 Independent evaluation is ready. Moving this card to Agent Review starts the Evaluator Agent.`);
+  if (!worktree?.path || !worktree.branch) {
+    await moveCard(cardId, reviewListId);
+    await commentOnCard(cardId, "❌ Coding Agent did not provide a candidate worktree path and branch. Independent evaluation cannot be started.");
+    return;
+  }
+  const handoff = await prepareGitEvaluationHandoff({
+    workItem,
+    worktreePath: worktree.path,
+    branch: String(worktree.branch ?? ""),
+    intentPath: contract.intent.path,
+    contractText: stringify(contract),
+    evidencePath: join(config.targetRepo, ".agent", "evidence", `${workItem}-${runId}.json`),
+  });
+  const handoffComment = JSON.stringify(handoff);
+  await commentOnCard(cardId, `${handoffMarker}${handoffComment} -->\n🔎 Independent evaluation is ready from Git revision \`${handoff.revision}\`. Moving this card to Agent Review starts the Evaluator Agent.`);
   await moveCard(cardId, reviewListId);
 }
 
@@ -110,7 +120,7 @@ async function evaluateCard(cardId: string): Promise<void> {
     await commentOnCard(cardId, "⚠️ Agent Review was entered without an evaluator handoff. No evaluator run was started.");
     return;
   }
-  let handoff: { contractPath?: string; evidencePath?: string };
+  let handoff: { repositoryUrl?: string; revision?: string; intentPath?: string; contractPath?: string; evidencePath?: string };
   try {
     const payload = handoffComment.data.text.slice(handoffMarker.length).split(" -->", 1)[0];
     handoff = JSON.parse(payload);
@@ -118,17 +128,24 @@ async function evaluateCard(cardId: string): Promise<void> {
     await commentOnCard(cardId, "⚠️ The evaluator handoff metadata is invalid. No evaluator run was started.");
     return;
   }
-  if (!handoff.contractPath || !handoff.evidencePath) {
+  if (!handoff.repositoryUrl || !handoff.revision || !handoff.intentPath || !handoff.contractPath || !handoff.evidencePath) {
     await commentOnCard(cardId, "⚠️ The evaluator handoff is incomplete. No evaluator run was started.");
     return;
   }
-  const contractText = await (await import("node:fs/promises")).readFile(join(config.targetRepo, handoff.contractPath), "utf8");
-  const evidence = JSON.parse(await (await import("node:fs/promises")).readFile(join(config.targetRepo, handoff.evidencePath), "utf8")) as Record<string, unknown>;
   await commentOnCard(cardId, "🔎 Independent Evaluator Agent started because the card entered Agent Review.");
 
   let evaluated;
   try {
-    evaluated = await runEvaluatorAgent(contractText, evidence);
+    evaluated = await runRemoteEvaluator({
+      endpoint: `${config.evaluatorApiUrl.replace(/\/$/, "")}/evaluations`,
+      token: config.evaluatorApiToken,
+      repositoryUrl: handoff.repositoryUrl,
+      revision: handoff.revision,
+      workItem: String(card.idShort),
+      intentPath: handoff.intentPath,
+      contractPath: handoff.contractPath,
+      evidencePath: handoff.evidencePath,
+    });
   } catch (err) {
     await commentOnCard(cardId, `❌ Evaluator could not start: ${err instanceof Error ? err.message : String(err)}. Card remains in Agent Review.`);
     return;

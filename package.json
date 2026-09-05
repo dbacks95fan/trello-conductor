@@ -4,7 +4,7 @@
   "description": "Trello Conductor: Trello-webhook-driven orchestrator that detects Ready-for-Agent cards, invokes the Coding Agent, and updates Trello workflow state.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --import tsx --test src/**/*.test.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "dev": "tsx src/server.ts"
