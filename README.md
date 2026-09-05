@@ -106,9 +106,9 @@ subscription — idempotent, safe to restart.
 
 Set `EVALUATOR_API_URL` to the NAS evaluator address and `EVALUATOR_API_TOKEN`
 to the same bearer token configured by the evaluator. Store the bearer token in
-the user-level `C:\Users\<your-user>\.config\agentic-sdlc\runtime.env` file, not
-in this repository. Set `ORCHESTRATOR_SECRETS_FILE` only if you use another
-location. The evaluator deployment
+the shared workspace `C:\Repos\.config\agentic-sdlc\runtime.env` file, not in a
+repository. Set `ORCHESTRATOR_SECRETS_FILE` only if you use another location.
+The evaluator deployment
 must set `EVALUATOR_ALLOWED_REPOSITORY_URL` to the candidate repository’s HTTPS
 `origin` URL. If that repository is private, configure a read-only GitHub
 credential in the NAS runtime environment. Do not store credentials in this
