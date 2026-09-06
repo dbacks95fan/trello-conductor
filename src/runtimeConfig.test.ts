@@ -5,5 +5,6 @@ import { join } from "node:path";
 import { defaultRuntimeSecretsFile } from "./runtimeConfig.js";
 
 test("uses the agentic SDLC runtime file beside project repositories", () => {
-  assert.equal(defaultRuntimeSecretsFile("/workspace/orchestrator"), join("/workspace", ".config", "agentic-sdlc", "runtime.env"));
+  const projectDirectory = join("workspace", "orchestrator");
+  assert.equal(defaultRuntimeSecretsFile(projectDirectory), join("workspace", ".config", "agentic-sdlc", "runtime.env"));
 });

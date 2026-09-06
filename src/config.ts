@@ -16,11 +16,13 @@ export const config = {
   trelloToken: required("TRELLO_TOKEN"),
   trelloApiSecret: required("TRELLO_API_SECRET"),
   boardId: required("TRELLO_BOARD_ID"),
-  listReady: process.env.TRELLO_LIST_READY ?? "Ready for Agent",
+  // Planning completes before build work is admitted, so this trigger cannot spend coding capacity on an unapproved design.
+  listReady: process.env.TRELLO_LIST_READY ?? "Ready for Build",
   listWorking: process.env.TRELLO_LIST_WORKING ?? "Agent Working",
   listReview: process.env.TRELLO_LIST_REVIEW ?? "Agent Review",
   listHumanApproval: process.env.TRELLO_LIST_HUMAN_APPROVAL ?? "Human Approval",
-  listHumanDecision: process.env.TRELLO_LIST_HUMAN_DECISION ?? "Human Decision Required",
+  // A decision is a form of human approval in the visible workflow, so one shared list avoids an undocumented side path.
+  listHumanDecision: process.env.TRELLO_LIST_HUMAN_DECISION ?? "Human Approval",
   wipLimit: Number(process.env.WIP_LIMIT ?? "1"),
   codingAgentCli: required("CODING_AGENT_CLI"),
   evaluatorApiUrl: required("EVALUATOR_API_URL"),
