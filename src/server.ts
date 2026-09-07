@@ -2,7 +2,7 @@ import express from "express";
 import { config, webhookUrl } from "./config.js";
 import { ensureWebhook, getListIdByName, resolveBoardId } from "./trello/client.js";
 import { verifyTrelloSignature } from "./trello/webhookVerify.js";
-import { handleCardReadyForAgent, handleCardReviewForAgent } from "./workflow/workflow.js";
+import { handleCardReadyForAgent, handleCardReviewForAgent, handleCardSpecAndDesign } from "./workflow/workflow.js";
 
 const app = express();
 
@@ -42,12 +42,18 @@ app.post("/webhooks/trello", async (req, res) => {
     return;
   }
 
-  const action = payload.action;
+  const action = payload.action as {
+    type?: string;
+    date?: string;
+    data?: Record<string, unknown>;
+    memberCreator?: { id?: string; fullName?: string; username?: string };
+  };
   if (!action || action.type !== "updateCard") return;
 
   const data = action.data as { listAfter?: { name?: string }; card?: { id?: string } };
   const movedIntoReady = data.listAfter?.name === config.listReady;
   const movedIntoReview = data.listAfter?.name === config.listReview;
+  const movedIntoSpecDesign = data.listAfter?.name === config.listSpecDesign;
   const cardId = data.card?.id;
 
   if (movedIntoReady && cardId) {
@@ -56,6 +62,16 @@ app.post("/webhooks/trello", async (req, res) => {
   } else if (movedIntoReview && cardId) {
     console.log(`[trello-conductor] Card ${cardId} moved into "${config.listReview}".`);
     handleCardReviewForAgent(cardId);
+  } else if (movedIntoSpecDesign && cardId) {
+    console.log(`[trello-conductor] Card ${cardId} moved into "${config.listSpecDesign}".`);
+    // The person who moved the card into Spec & Design is recorded as the
+    // Ready-for-Planning approver of record; the exact freeze time is preferred
+    // from the intent's own frozen_at when the resolver finds it.
+    const member = action.memberCreator;
+    handleCardSpecAndDesign(cardId, {
+      approvedBy: member?.fullName || member?.username || member?.id || "trello-conductor",
+      approvedAt: typeof action.date === "string" ? action.date : new Date().toISOString(),
+    });
   }
 });
 
@@ -65,6 +81,9 @@ async function main() {
   await getListIdByName(config.listReady);
   await getListIdByName(config.listWorking);
   await getListIdByName(config.listReview);
+  // listSpecDesign / listDesignReview are resolved lazily on first use so a
+  // board that has not added those lists yet does not block startup of the
+  // existing coding and evaluation flow.
 
   // Must be listening BEFORE asking Trello to register the webhook — Trello
   // does an immediate reachability check (a HEAD request) against the callback

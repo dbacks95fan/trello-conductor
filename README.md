@@ -1,10 +1,19 @@
 # Trello Conductor (v0.1)
 
-Trello-webhook-driven orchestrator for the experimental Agentic SDLC. Watches
-one Trello list ("Ready for Agent"), and when a card moves into it: validates
-the event came from Trello, builds a Work Contract from the card, enforces a
-WIP limit, invokes the [coding-agent](https://github.com/dbacks95fan/coding-agent)
-CLI, and updates the card's list + comments based on the result.
+Trello-webhook-driven orchestrator for the experimental Agentic SDLC. It
+validates that each webhook delivery came from Trello, then reacts to a card
+entering one of three lists:
+
+| Card enters | Conductor runs | On success moves to |
+| --- | --- | --- |
+| **Spec & Design** | [spec-design-agent](https://github.com/dbacks95fan/spec-design-agent) (frozen intent → `spec.md`) | Design Review |
+| **Ready for Agent** | [coding-agent](https://github.com/dbacks95fan/coding-agent) (Work Contract → candidate) | Agent Review |
+| **Agent Review** | the NAS Evaluator (candidate Git revision → structured result) | Human Approval / Human Decision Required |
+
+Stage names follow the canonical lifecycle vocabulary in
+[`agentic-sdlc/docs/WORKFLOW.md`](https://github.com/dbacks95fan/agentic-sdlc/blob/main/docs/WORKFLOW.md).
+Trello Conductor — not an agent — owns every Trello read and write. It never
+moves a card to Done and never records an approval.
 
 Trello Conductor — not Claude — owns all Trello reads and writes. It calls the
 Trello REST API directly with a key/token/secret; the Coding Agent it invokes
@@ -27,17 +36,63 @@ src/
 │   ├── client.ts                thin Trello REST API wrapper (lists, cards, comments, webhooks)
 │   └── webhookVerify.ts         HMAC signature check on incoming deliveries
 ├── workflow/
-│   ├── workflow.ts              the queue + per-card state machine
+│   ├── workflow.ts              the queues + per-card state machines
 │   ├── wip.ts                   WIP limit check against TRELLO_LIST_WORKING
-│   └── contractFromCard.ts      deterministic card-description -> Work Contract parser
-└── codingAgent/
-    └── runCodingAgent.ts        spawns the coding-agent CLI as a subprocess
+│   ├── contractFromCard.ts      deterministic card-description -> Work Contract parser
+│   ├── specRequestFromCard.ts   card metadata + intent-backlog fetch -> Spec & Design request
+│   ├── specWorkspace.ts         creates work/<intent-id> worktree, freezes intent.md into it
+│   └── specRouting.ts           Spec & Design result -> board destination + decision brief
+├── codingAgent/
+│   └── runCodingAgent.ts        spawns the coding-agent CLI as a subprocess
+├── specDesignAgent/
+│   └── runSpecDesignAgent.ts    spawns the spec-design-agent bounded job as a subprocess
+└── evaluatorAgent/
+    ├── gitHandoff.ts            commits + pushes immutable evaluator artifacts
+    └── remote.ts                authenticated request to the NAS Evaluator
 ```
 
 Grouped by concern rather than kept flat: `trello/` is everything that talks to
 Trello's API, `workflow/` is the orchestration logic that doesn't care which
-task-tracker it came from, `codingAgent/` is the one integration point with the
-tool it invokes.
+task-tracker it came from, and each `*Agent/` directory is one integration
+point with a tool it invokes.
+
+## Spec & Design trigger
+
+When a card enters `TRELLO_LIST_SPEC_DESIGN` the orchestrator acts as the first
+engineering-stage handler for that work item:
+
+1. It reads the intent projection the Intent Creation Skill writes onto the card
+   description — `Product`, `Intent ID`, `Intent Version`, `Intent Commit`,
+   `Intent Hash`, `Intent Status`, `Canonical intent`
+   (`src/workflow/specRequestFromCard.ts`). `Intent Status` must be `Frozen`.
+2. It fetches the exact `intent.md` bytes from the `intent-backlog` repository at
+   the pinned `Intent Commit` through the GitHub contents API, and refuses to
+   continue if the card projection and the canonical frontmatter disagree on
+   `intent_id`, `product_id`, `intent_version`, `status`, or `intent_hash`.
+3. It creates the isolated `work/<intent-id>` worktree in `TARGET_REPO` off the
+   current default-branch HEAD, writes the frozen bytes to
+   `.agent/work/<intent-id>/intent.md`, commits them on the work branch, and
+   computes their raw-byte `frozenArtifactSha256` (`src/workflow/specWorkspace.ts`).
+4. It builds a request per `spec-design-agent/schemas/spec-request.schema.json`
+   (`runId`, `workItem`, `productId`, `intent`, `target`, `approval`) and spawns
+   the Spec & Design Agent as a bounded subprocess:
+   `<SPEC_DESIGN_AGENT_CLI> spec --request <file> --provider <provider>`.
+5. It routes on the agent's result (`src/workflow/specRouting.ts`):
+   `spec_ready` → move to `TRELLO_LIST_DESIGN_REVIEW` with a decision brief;
+   `needs_decision` → move to `TRELLO_LIST_HUMAN_DECISION` with the itemised
+   decisions; `blocked` / `failed` / unparseable → leave the card in place with
+   a comment. Design Review is a human step; the orchestrator never approves it.
+
+**`approval` is a v0.1 approximation.** `approvedAt` is the intent's `frozen_at`
+when the frontmatter carries it, otherwise the timestamp of the move into Spec &
+Design; `approvedBy` is the Trello member who moved the card. A dedicated
+Ready-for-Planning capture would supply these directly.
+
+**This half follows the canonical model** (intent-backlog repo, `Frozen` status,
+`INT-<PRODUCT>-NNNN` work items, `work/<intent-id>` branch). The existing coding
+and evaluation triggers still use the older board vocabulary and derive
+`TRELLO-<idShort>` work items from an intent committed in `TARGET_REPO`; the two
+halves do not yet meet end to end.
 
 ## What it does, step by step
 
@@ -113,6 +168,16 @@ must set `EVALUATOR_ALLOWED_REPOSITORY_URL` to the candidate repository’s HTTP
 `origin` URL. If that repository is private, configure a read-only GitHub
 credential in the NAS runtime environment. Do not store credentials in this
 repository.
+
+For the Spec & Design trigger, set `SPEC_DESIGN_AGENT_CLI` to the command that
+runs the [spec-design-agent](https://github.com/dbacks95fan/spec-design-agent)
+bounded job (see `.env.example`), and put a `GITHUB_TOKEN` with read access to
+the private `intent-backlog` repository in the same shared runtime file. Add the
+`Spec & Design` and `Design Review` lists to the board (or point
+`TRELLO_LIST_SPEC_DESIGN` / `TRELLO_LIST_DESIGN_REVIEW` at your names). Until
+`SPEC_DESIGN_AGENT_CLI` is set, a card entering Spec & Design gets an
+explanatory card comment and stays put; the coding and evaluation triggers are
+unaffected.
 
 ## Known limitations (v0.1, on purpose)
 

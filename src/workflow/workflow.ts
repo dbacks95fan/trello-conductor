@@ -1,18 +1,30 @@
-// ABOUTME: Coordinates coding and remote evaluation transitions for Trello work items.
+// ABOUTME: Coordinates spec & design, coding, and remote evaluation transitions for Trello work items.
 import { CardParseError, contractFromCard } from "./contractFromCard.js";
 import { runCodingAgent } from "../codingAgent/runCodingAgent.js";
+import { runSpecDesignAgent, type SpecDesignRequest } from "../specDesignAgent/runSpecDesignAgent.js";
+import { resolveSpecRequest, SpecRequestError } from "./specRequestFromCard.js";
+import { routeSpecResult } from "./specRouting.js";
+import { prepareSpecWorkspace } from "./specWorkspace.js";
 import { prepareGitEvaluationHandoff } from "../evaluatorAgent/gitHandoff.js";
 import { runRemoteEvaluator } from "../evaluatorAgent/remote.js";
 import { commentOnCard, getCard, getListIdByName, moveCard } from "../trello/client.js";
 import { config } from "../config.js";
 import { isUnderWipLimit } from "./wip.js";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { stringify } from "yaml";
 
+export interface MoveApproval {
+  approvedBy: string;
+  approvedAt: string;
+}
+
 const pendingQueue: string[] = [];
 const pendingReviewQueue: string[] = [];
+const pendingSpecQueue: Array<{ cardId: string; approval: MoveApproval }> = [];
 let processing = false;
 let reviewing = false;
+let specing = false;
 const handoffMarker = "<!-- agentic-sdlc-evaluator-handoff ";
 
 export function enqueueCard(cardId: string): void {
@@ -23,6 +35,26 @@ export function enqueueCard(cardId: string): void {
 function enqueueReview(cardId: string): void {
   if (!pendingReviewQueue.includes(cardId)) pendingReviewQueue.push(cardId);
   void drainReviewQueue();
+}
+
+function enqueueSpec(cardId: string, approval: MoveApproval): void {
+  if (!pendingSpecQueue.some((entry) => entry.cardId === cardId)) {
+    pendingSpecQueue.push({ cardId, approval });
+  }
+  void drainSpecQueue();
+}
+
+async function drainSpecQueue(): Promise<void> {
+  if (specing) return;
+  specing = true;
+  try {
+    while (pendingSpecQueue.length > 0) {
+      const next = pendingSpecQueue.shift()!;
+      await processSpecCard(next.cardId, next.approval);
+    }
+  } finally {
+    specing = false;
+  }
 }
 
 async function drainReviewQueue(): Promise<void> {
@@ -194,10 +226,114 @@ async function evaluateCard(cardId: string): Promise<void> {
   }
 }
 
+async function processSpecCard(cardId: string, approval: MoveApproval): Promise<void> {
+  try {
+    await runSpecAndDesign(cardId, approval);
+  } catch (err) {
+    console.error(`[trello-conductor] Spec & Design failed for card ${cardId}:`, err);
+    await commentOnCard(
+      cardId,
+      `❌ Spec & Design could not be completed for this card: ${err instanceof Error ? err.message : String(err)}. The card stays in Spec & Design.`,
+    ).catch(() => undefined);
+  }
+}
+
+async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise<void> {
+  const card = await getCard(cardId);
+  console.log(`[trello-conductor] Spec & Design for card ${card.idShort} "${card.name}"`);
+
+  if (!config.specDesignAgentCli) {
+    await commentOnCard(
+      cardId,
+      "⚠️ Spec & Design Agent is not configured. Set `SPEC_DESIGN_AGENT_CLI` in the orchestrator environment.",
+    );
+    return;
+  }
+
+  let resolved;
+  try {
+    resolved = await resolveSpecRequest(card, {
+      githubApiBase: config.intentBacklogApiBase,
+      githubToken: config.githubToken,
+      approvedBy: approval.approvedBy,
+      approvedAt: approval.approvedAt,
+    });
+  } catch (err) {
+    if (err instanceof SpecRequestError) {
+      await commentOnCard(cardId, `⚠️ Spec & Design Agent was not started:\n\n${err.message}`);
+      return;
+    }
+    throw err;
+  }
+
+  for (const warning of resolved.warnings) {
+    await commentOnCard(cardId, `⚠️ ${warning}`);
+  }
+
+  let workspace;
+  try {
+    workspace = await prepareSpecWorkspace({
+      targetRepo: config.targetRepo,
+      worktreeRoot: config.worktreeRoot,
+      intentId: resolved.intentId,
+      frozenIntentBytes: resolved.frozenIntentBytes,
+    });
+  } catch (err) {
+    await commentOnCard(
+      cardId,
+      `❌ Could not create the isolated \`work/${resolved.intentId}\` worktree for Spec & Design: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return;
+  }
+
+  const request: SpecDesignRequest = {
+    runId: randomUUID(),
+    workItem: resolved.intentId,
+    productId: resolved.productId,
+    intent: {
+      repository: resolved.intentRepository,
+      commit: resolved.intentCommit,
+      path: resolved.intentPath,
+      frozenArtifactSha256: workspace.frozenArtifactSha256,
+      contentSha256: resolved.intentContentSha256,
+    },
+    target: {
+      repository: config.targetRepo,
+      baseCommit: workspace.baseCommit,
+      branch: workspace.branch,
+      workspace: workspace.path,
+    },
+    approval: {
+      readyForPlanning: true,
+      approvedBy: resolved.approvedBy,
+      approvedAt: resolved.approvedAt,
+    },
+  };
+
+  await commentOnCard(
+    cardId,
+    `🧭 Spec & Design Agent started for \`${request.workItem}\` (run \`${request.runId}\`) on branch \`${workspace.branch}\`.`,
+  );
+
+  const run = await runSpecDesignAgent(request);
+  const route = routeSpecResult(run);
+  await commentOnCard(cardId, route.comment);
+
+  if (route.destination === "design-review") {
+    await moveCard(cardId, await getListIdByName(config.listDesignReview));
+  } else if (route.destination === "human-decision") {
+    await moveCard(cardId, await getListIdByName(config.listHumanDecision));
+  }
+}
+
 export function handleCardReadyForAgent(cardId: string): void {
   enqueueCard(cardId);
 }
 
 export function handleCardReviewForAgent(cardId: string): void {
   enqueueReview(cardId);
+}
+
+export function handleCardSpecAndDesign(cardId: string, approval: MoveApproval): void {
+  enqueueSpec(cardId, approval);
 }
