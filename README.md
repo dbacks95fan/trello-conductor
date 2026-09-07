@@ -7,8 +7,8 @@ entering one of three lists:
 | Card enters | Conductor runs | On success moves to |
 | --- | --- | --- |
 | **Spec & Design** | [spec-design-agent](https://github.com/dbacks95fan/spec-design-agent) container (frozen intent → `spec.md`) | Design Review |
-| **Ready for Agent** | [coding-agent](https://github.com/dbacks95fan/coding-agent) (Work Contract → candidate) | Agent Review |
-| **Agent Review** | the NAS Evaluator (candidate Git revision → structured result) | Human Approval / Human Decision Required |
+| **Ready for Build** | [coding-agent](https://github.com/dbacks95fan/coding-agent) (Work Contract → candidate) | Agent Review |
+| **Agent Review** | the NAS Evaluator (candidate Git revision → structured result) | Human Approval |
 
 Stage names follow the canonical lifecycle vocabulary in
 [`agentic-sdlc/docs/WORKFLOW.md`](https://github.com/dbacks95fan/agentic-sdlc/blob/main/docs/WORKFLOW.md).
@@ -109,8 +109,8 @@ engineering-stage handler for that work item:
    work in the image; credentials were the only missing piece.
 5. It routes on the agent's result (`src/workflow/specRouting.ts`):
    `spec_ready` → move to `TRELLO_LIST_DESIGN_REVIEW` with a decision brief;
-   `needs_decision` → move to `TRELLO_LIST_HUMAN_DECISION` with the itemised
-   decisions; `blocked` / `failed` / unparseable → leave the card in place with
+   `needs_decision` → move to `TRELLO_LIST_HUMAN_DECISION` (which now shares the
+   Human Approval list) with the itemised decisions; `blocked` / `failed` / unparseable → leave the card in place with
    a comment. Design Review is a human step; the orchestrator never approves it.
 6. On `spec_ready` the **Conductor** pushes the work branch and comments its URL,
    so a human Design Reviewer has something to open. The agent does not push:
@@ -231,7 +231,7 @@ coding and evaluation triggers are unaffected.
   which means a new webhook registration — the old one is left dangling on
   Trello (harmless, just unused) until manually cleaned up. A named tunnel with
   a real domain would fix this; out of scope for now.
-- **The WIP queue is in-memory only.** A card sitting in `Ready for Agent`
+- **The WIP queue is in-memory only.** A card sitting in `Ready for Build`
   when Trello Conductor restarts will not be picked up automatically — move
   it out and back into the list to re-trigger the webhook, or wait for a
   future periodic-sweep fallback (not built yet).
