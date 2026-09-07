@@ -39,6 +39,10 @@ export const config = {
   specDesignRuntimeEnvFile:
     process.env.SPEC_DESIGN_AGENT_RUNTIME_ENV ?? resolve(targetRepo, "..", "spec-design-agent", ".runtime.env"),
   specDesignTimeoutMs: Number(process.env.SPEC_DESIGN_AGENT_TIMEOUT_MS ?? "900000"),
+  // Token git inside the container uses to reach GitHub. Defaults to the
+  // orchestrator's own token; set SPEC_DESIGN_GITHUB_TOKEN to hand the agent a
+  // narrower, read-only credential than the one the Conductor pushes with.
+  specDesignGithubToken: process.env.SPEC_DESIGN_GITHUB_TOKEN ?? process.env.GITHUB_TOKEN ?? "",
   evaluatorApiUrl: required("EVALUATOR_API_URL"),
   evaluatorApiToken: required("EVALUATOR_API_TOKEN"),
   targetRepo,

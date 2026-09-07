@@ -27,6 +27,8 @@ export interface SpecWorkspace {
   branch: string;
   baseCommit: string;
   frozenArtifactSha256: string;
+  /** HTTPS remote the clone's origin points at, shared with the container. */
+  remoteUrl: string;
   created: boolean;
 }
 
@@ -47,13 +49,25 @@ export async function prepareSpecWorkspace(input: PrepareSpecWorkspaceInput): Pr
     await git(["clone", "--no-hardlinks", input.targetRepo, path], input.workspaceRoot);
     const hasBranch = (await git(["branch", "--list", branch], path)).length > 0;
     await git(hasBranch ? ["checkout", branch] : ["checkout", "-b", branch, baseCommit], path);
-    // The clone's origin is a host path the container cannot reach; the agent
-    // works offline against local history, so drop it to avoid confusing fetches.
-    await git(["remote", "remove", "origin"], path).catch(() => undefined);
     created = true;
   } else {
     await git(["checkout", branch], path).catch(() => undefined);
   }
+
+  // Cloning from the local path is fast and needs no credentials, but leaves an
+  // origin the container cannot resolve. Retarget it at the real HTTPS remote so
+  // git behaves the same inside the container as on the host, and so the branch
+  // can be published for Design Review.
+  // `git config --get` exits non-zero when the key is absent; treat that as "no
+  // remote" so the explicit check below reports something actionable.
+  const remoteUrl = await git(["config", "--get", "remote.origin.url"], input.targetRepo).catch(() => "");
+  if (!remoteUrl.startsWith("https://")) {
+    throw new Error(
+      `TARGET_REPO remote.origin.url must be an HTTPS GitHub URL so the container and the push step can reach it; found "${remoteUrl || "none"}".`,
+    );
+  }
+  const hasRemote = (await git(["remote"], path)).length > 0;
+  await git(hasRemote ? ["remote", "set-url", "origin", remoteUrl] : ["remote", "add", "origin", remoteUrl], path);
 
   const relativeIntentPath = join(".agent", "work", input.intentId, "intent.md");
   await mkdir(join(path, ".agent", "work", input.intentId), { recursive: true });
@@ -78,5 +92,47 @@ export async function prepareSpecWorkspace(input: PrepareSpecWorkspaceInput): Pr
   }
 
   const frozenArtifactSha256 = createHash("sha256").update(input.frozenIntentBytes).digest("hex");
-  return { path, branch, baseCommit, frozenArtifactSha256, created };
+  return { path, branch, baseCommit, frozenArtifactSha256, remoteUrl, created };
+}
+
+/** Git credential configuration that resolves the token from the environment at
+ *  call time, so the secret never appears in argv, in a config file, or in the
+ *  reflog. The empty first value clears any inherited helper. Mirrors the
+ *  configuration handed to the container. */
+const CREDENTIAL_CONFIG = [
+  "-c",
+  "credential.helper=",
+  "-c",
+  'credential.helper=!f(){ echo username=x-access-token; echo "password=$GITHUB_TOKEN"; };f',
+];
+
+export interface PublishSpecBranchResult {
+  pushed: boolean;
+  branchUrl: string;
+  reason?: string;
+}
+
+/** Publishes the work branch so a human Design Reviewer has something to open.
+ *  The Conductor pushes, not the agent: AGENT_ROLES.md grants the Spec & Design
+ *  Agent no write authority over the product repository, and the evaluator
+ *  handoff already establishes the Conductor as the component that publishes a
+ *  branch. Requires GITHUB_TOKEN in the orchestrator's environment. */
+export async function publishSpecBranch(
+  workspace: Pick<SpecWorkspace, "path" | "branch" | "remoteUrl">,
+  token: string,
+): Promise<PublishSpecBranchResult> {
+  const branchUrl = `${workspace.remoteUrl.replace(/\.git$/, "")}/tree/${workspace.branch}`;
+  if (!token) {
+    return { pushed: false, branchUrl, reason: "GITHUB_TOKEN is not configured for the orchestrator." };
+  }
+  try {
+    await execFileAsync("git", [...CREDENTIAL_CONFIG, "push", "--set-upstream", "origin", workspace.branch], {
+      cwd: workspace.path,
+      windowsHide: true,
+      env: { ...process.env, GITHUB_TOKEN: token },
+    });
+    return { pushed: true, branchUrl };
+  } catch (err) {
+    return { pushed: false, branchUrl, reason: err instanceof Error ? err.message : String(err) };
+  }
 }

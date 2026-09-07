@@ -101,11 +101,23 @@ engineering-stage handler for that work item:
    bind-mounted files, which would stop the agent at its first workspace check.
    Setting them by environment avoids needing a writable `HOME` or rootfs. A `-c`
    flag from the agent still takes precedence.
+
+   When a token is configured, a fourth entry adds a `credential.helper` so git
+   inside the container can reach GitHub. The token is passed by environment
+   pass-through (`-e GITHUB_TOKEN`, no `=value`), so it never appears in argv,
+   `docker inspect`, or the process list. Network egress and CA trust already
+   work in the image; credentials were the only missing piece.
 5. It routes on the agent's result (`src/workflow/specRouting.ts`):
    `spec_ready` → move to `TRELLO_LIST_DESIGN_REVIEW` with a decision brief;
    `needs_decision` → move to `TRELLO_LIST_HUMAN_DECISION` with the itemised
    decisions; `blocked` / `failed` / unparseable → leave the card in place with
    a comment. Design Review is a human step; the orchestrator never approves it.
+6. On `spec_ready` the **Conductor** pushes the work branch and comments its URL,
+   so a human Design Reviewer has something to open. The agent does not push:
+   `AGENT_ROLES.md` grants it no write authority over the product repository, and
+   the evaluator handoff already establishes the Conductor as the component that
+   publishes a branch. A failed push is reported on the card; the spec is still
+   committed locally on the work branch.
 
 **`approval` is a v0.1 approximation.** `approvedAt` is the intent's `frozen_at`
 when the frontmatter carries it, otherwise the timestamp of the move into Spec &

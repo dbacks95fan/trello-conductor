@@ -83,3 +83,51 @@ Also dropped a redundant `--workdir /app` — the image already sets it. (It fir
 showed up as a bogus `C:/Program Files/Git/app` because Git Bash rewrote the
 path in my manual probe; Node's `spawn` does no such conversion, so it was never
 a product bug, just a misleading test artifact.)
+
+## 2026-09-07
+
+Deployed `spec-design-agent:local` to Docker Desktop. Build was blocked by a
+transposed base-image tag: `python:3.12-bookworm-slim` does not exist, it is
+`python:3.12-slim-bookworm`. (The uv builder tag genuinely is `bookworm-slim` —
+astral uses the opposite convention, which is likely how it crept in.)
+
+Ran the image through the orchestrator's real code path against a menuapp clone
+with `provider=mock`. Everything on our side worked — mount, safe.directory,
+read-only rootfs, request round-trip, result parsing, routing, TARGET_REPO
+untouched — and the agent got as far as writing `spec.md` before failing:
+
+    git add -- .agent/work/INT-MF-0042/{intent.md,spec.md,spec-run.json} -> exit 1
+
+Reproduced in isolation: `menuapp/.gitignore:19` ignores `.agent/`, and plain
+`git add` refuses ignored paths. `git add --force` stages them. The agent uses
+plain `git add`; our `specWorkspace.ts` and the evaluator's `gitHandoff.ts` both
+already force. Left the fix to Sobe — either the agent forces, or menuapp stops
+ignoring `.agent/work/` — because it is a policy call across his repos, unlike
+the Dockerfile tag which had one right answer.
+
+### GitHub from inside the container
+
+Measured before changing anything: **network egress and CA trust already worked**
+— the container reads a public repo fine. The only gaps were credentials and a
+usable remote. So this was never a networking change.
+
+- `specWorkspace.ts` now *retargets* origin to the target repo's real HTTPS URL
+  instead of removing it. Cloning from the local path stays fast and credential
+  free, but the clone now carries a remote that resolves identically on the host
+  and in the container. Refuses a target repo whose origin is not HTTPS.
+- The container gets a `credential.helper` via `GIT_CONFIG_KEY_3`, with the token
+  passed by **environment pass-through** (`-e GITHUB_TOKEN`, no `=value`) so it
+  never lands in argv, `docker inspect`, or the process list. Verified with a
+  bogus token: GitHub answers "Invalid username or token" (credentials sent and
+  rejected) rather than "could not read Username" (none sent).
+- **The Conductor pushes, not the agent.** `AGENT_ROLES.md` grants the Spec &
+  Design Agent no write authority over the product repository, and the evaluator
+  handoff already makes the Conductor the component that publishes a branch. The
+  agent's own contract is commit-only, so without this step `spec.md` would never
+  leave the host and Design Review would have nothing to open.
+- `SPEC_DESIGN_GITHUB_TOKEN` lets the container hold a narrower read-only
+  credential than the write-capable one the push uses.
+
+A test caught a UX defect worth noting: with no origin at all, `git config --get`
+exits non-zero, so the cryptic "Command failed" surfaced instead of the
+actionable message. Now tolerated and reported properly.

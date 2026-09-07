@@ -4,7 +4,7 @@ import { runCodingAgent } from "../codingAgent/runCodingAgent.js";
 import { CONTAINER_WORKSPACE, runSpecDesignAgent, type SpecDesignRequest } from "../specDesignAgent/runSpecDesignAgent.js";
 import { resolveSpecRequest, SpecRequestError } from "./specRequestFromCard.js";
 import { routeSpecResult } from "./specRouting.js";
-import { prepareSpecWorkspace } from "./specWorkspace.js";
+import { prepareSpecWorkspace, publishSpecBranch } from "./specWorkspace.js";
 import { prepareGitEvaluationHandoff } from "../evaluatorAgent/gitHandoff.js";
 import { runRemoteEvaluator } from "../evaluatorAgent/remote.js";
 import { commentOnCard, getCard, getListIdByName, moveCard } from "../trello/client.js";
@@ -314,6 +314,16 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
   await commentOnCard(cardId, route.comment);
 
   if (route.destination === "design-review") {
+    // Design Review is a human step, so the spec has to exist somewhere a
+    // reviewer can open. The Conductor publishes the branch — the agent has no
+    // write authority over the product repository (AGENT_ROLES.md).
+    const published = await publishSpecBranch(workspace, config.githubToken);
+    await commentOnCard(
+      cardId,
+      published.pushed
+        ? `📤 Work branch published for Design Review: ${published.branchUrl}`
+        : `⚠️ The spec is committed locally on \`${workspace.branch}\` but could not be pushed for review: ${published.reason}`,
+    );
     await moveCard(cardId, await getListIdByName(config.listDesignReview));
   } else if (route.destination === "human-decision") {
     await moveCard(cardId, await getListIdByName(config.listHumanDecision));
