@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { SpecDesignResult } from "../specDesignAgent/runSpecDesignAgent.js";
-import { routeSpecResult } from "./specRouting.js";
+import { formatUsage, routeSpecResult } from "./specRouting.js";
 
 function run(result: Record<string, unknown> | null, extra: Partial<SpecDesignResult> = {}): SpecDesignResult {
   return { exitCode: 0, result, rawStdout: "", rawStderr: "", timedOut: false, ...extra };
@@ -83,4 +83,46 @@ test("an unknown status is surfaced without moving the card", () => {
   const route = routeSpecResult(run({ status: "surprise", summary: "n/a" }));
   assert.equal(route.destination, null);
   assert.match(route.comment, /unrecognised status/i);
+});
+
+test("formatUsage renders tokens, cache, turns, and cost", () => {
+  const line = formatUsage({
+    inputTokens: 12000, outputTokens: 3400, cacheReadTokens: 800,
+    cacheCreationTokens: 200, totalTokens: 16400, turns: 4, costUsd: 0.1875,
+  });
+  assert.match(line, /16,400 tokens/);
+  assert.match(line, /12,000 in \/ 3,400 out \/ 800 cached/);
+  assert.match(line, /across 4 turns/);
+  assert.match(line, /\$0\.19/);
+});
+
+test("formatUsage keeps sub-cent runs from reading as free", () => {
+  assert.match(formatUsage({ totalTokens: 900, inputTokens: 800, outputTokens: 100, turns: 1, costUsd: 0.0031 }), /\$0\.0031/);
+});
+
+test("formatUsage returns nothing when the provider reports no usage", () => {
+  assert.equal(formatUsage(undefined), "");
+  assert.equal(formatUsage({}), "");
+  assert.equal(formatUsage([1, 2]), "");
+});
+
+test("a spec_ready comment reports what the run cost", () => {
+  const route = routeSpecResult(
+    run({
+      status: "spec_ready", summary: "ok", branch: "work/INT-MF-0042",
+      specPath: ".agent/work/INT-MF-0042/spec.md", specCommit: "f".repeat(40), specVersion: 1,
+      nonBlockingConcerns: [],
+      usage: { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 1200, turns: 2, costUsd: 0.05 },
+    }),
+  );
+  assert.equal(route.destination, "design-review");
+  assert.match(route.comment, /🧾 Usage: 1,200 tokens/);
+  assert.match(route.comment, /\$0\.05/);
+});
+
+test("a failed run still reports what it cost before failing", () => {
+  const route = routeSpecResult(
+    run({ status: "failed", summary: "provider timeout", usage: { totalTokens: 5000, inputTokens: 4800, outputTokens: 200, turns: 1, costUsd: 0.02 } }, { exitCode: 30 }),
+  );
+  assert.match(route.comment, /🧾 Usage: 5,000 tokens/);
 });
