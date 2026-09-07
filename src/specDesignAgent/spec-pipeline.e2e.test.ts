@@ -25,7 +25,8 @@ function initTargetRepo(): string {
   git("init", "-b", "main");
   git("config", "user.email", "test@example.com");
   git("config", "user.name", "Test");
-  writeFileSync(join(dir, ".gitignore"), ".agent/\n");
+  // A compliant product repo: agent scratch ignored, `.agent/work/` tracked.
+  writeFileSync(join(dir, ".gitignore"), ".agent/*\n!.agent/work/\n");
   writeFileSync(join(dir, "app.js"), "// product code\n");
   git("add", "-A");
   git("commit", "-m", "initial");

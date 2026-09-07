@@ -90,7 +90,8 @@ fs.writeFileSync(
 );
 const git = (args) =>
   cp.execFileSync("git", ["-c", "user.email=a@b.c", "-c", "user.name=Spec Agent", ...args], { cwd: source }).toString().trim();
-git(["add", "--force", "--", specRelPath]);
+// Plain add, matching the real agent: `.agent/work/` must be tracked content.
+git(["add", "--", specRelPath]);
 git(["commit", "-m", `spec: ${request.workItem}`]);
 const specCommit = git(["rev-parse", "HEAD"]);
 

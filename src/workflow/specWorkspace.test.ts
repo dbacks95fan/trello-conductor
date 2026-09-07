@@ -16,7 +16,9 @@ function initRepo(originUrl: string | null = REMOTE_URL): string {
   git("init", "-b", "main");
   git("config", "user.email", "test@example.com");
   git("config", "user.name", "Test");
-  writeFileSync(join(dir, ".gitignore"), ".agent/\n");
+  // A compliant product repo: agent scratch is ignored, `.agent/work/` is tracked
+  // so every stage can commit its artifacts with a plain `git add`.
+  writeFileSync(join(dir, ".gitignore"), ".agent/*\n!.agent/work/\n");
   writeFileSync(join(dir, "README.md"), "target repo\n");
   git("add", "-A");
   git("commit", "-m", "initial");
@@ -68,6 +70,28 @@ test("prepareSpecWorkspace clones work/<id>, freezes intent.md, and is idempoten
       execFileSync("git", ["log", "--oneline"], { cwd: first.path }).toString().trim().split("\n").length,
       2,
       "re-entering Spec & Design must not add another freeze commit",
+    );
+  } finally {
+    rmSync(targetRepo, { recursive: true, force: true });
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("prepareSpecWorkspace fails loudly when the repo ignores .agent/work/", async () => {
+  const targetRepo = initRepo();
+  // A non-compliant product repo: the artifact home is ignored. We never work
+  // around this with --force; the repository's .gitignore is the thing to fix.
+  writeFileSync(join(targetRepo, ".gitignore"), ".agent/\n");
+  execFileSync("git", ["commit", "-qam", "ignore .agent"], { cwd: targetRepo, stdio: "pipe" });
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "spec-workspace-roots-"));
+  try {
+    await assert.rejects(
+      prepareSpecWorkspace({
+        targetRepo,
+        workspaceRoot,
+        intentId: "INT-MF-0042",
+        frozenIntentBytes: Buffer.from("---\nintent_id: INT-MF-0042\n---\n"),
+      }),
     );
   } finally {
     rmSync(targetRepo, { recursive: true, force: true });

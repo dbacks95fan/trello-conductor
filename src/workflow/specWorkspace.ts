@@ -73,9 +73,11 @@ export async function prepareSpecWorkspace(input: PrepareSpecWorkspaceInput): Pr
   await mkdir(join(path, ".agent", "work", input.intentId), { recursive: true });
   await writeFile(join(path, relativeIntentPath), input.frozenIntentBytes);
 
-  // .agent/ is commonly gitignored in product repos; force-add so the frozen
-  // input is committed on the work branch as its chain-of-custody root.
-  await git(["add", "--force", "--", relativeIntentPath], path);
+  // Plain add, never --force: a product repository must track `.agent/work/` so
+  // agent-owned artifacts are ordinary versioned content. If this fails because
+  // the path is ignored, the repository's .gitignore is wrong and should say so
+  // loudly rather than be overridden here.
+  await git(["add", "--", relativeIntentPath], path);
   if ((await git(["diff", "--cached", "--name-only"], path)).length > 0) {
     await git(
       [
