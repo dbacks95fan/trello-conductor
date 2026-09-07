@@ -1,49 +1,23 @@
-// ABOUTME: End-to-end test of the orchestrator's Spec & Design pipeline minus the Trello REST calls.
+// ABOUTME: End-to-end test of the Spec & Design pipeline: card -> frozen intent -> clone -> container -> routing.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveSpecRequest } from "../workflow/specRequestFromCard.js";
 import { prepareSpecWorkspace } from "../workflow/specWorkspace.js";
 import { routeSpecResult } from "../workflow/specRouting.js";
-import { runSpecDesignAgent, type SpecDesignRequest } from "./runSpecDesignAgent.js";
+import { CONTAINER_WORKSPACE, runSpecDesignAgent, type SpecDesignRequest } from "./runSpecDesignAgent.js";
 import type { TrelloCard } from "../trello/client.js";
 
-const PATH = "products/mealflow/intents/INT-MF-0042/intent.md";
+const here = dirname(fileURLToPath(import.meta.url));
+const FAKE_DOCKER = join(here, "__fixtures__", "fake-docker.cjs");
 
-// Stand-in agent: verifies the frozen bytes against frozenArtifactSha256 (the
-// real job's non-negotiable check), writes spec.md, commits it on the work
-// branch, and prints one spec_ready result.
-const AGENT_SOURCE = `
-const fs = require("node:fs");
-const path = require("node:path");
-const cp = require("node:child_process");
-const crypto = require("node:crypto");
-const a = process.argv.slice(2);
-const request = JSON.parse(fs.readFileSync(a[a.indexOf("--request") + 1], "utf8"));
-const ws = request.target.workspace;
-const intent = fs.readFileSync(path.join(ws, ".agent", "work", request.workItem, "intent.md"));
-const sha = crypto.createHash("sha256").update(intent).digest("hex");
-if (sha !== request.intent.frozenArtifactSha256) {
-  process.stdout.write(JSON.stringify({ runId: request.runId, workItem: request.workItem, status: "blocked", summary: "INTENT_MUTATED", branch: request.target.branch, workspace: ws, intentCommit: request.intent.commit, frozenArtifactSha256: sha, intentContentSha256: request.intent.contentSha256, blockingConcerns: ["INTENT_MUTATED"], nonBlockingConcerns: [], humanDecisions: [] }));
-  process.exit(20);
-}
-const specRelPath = path.join(".agent", "work", request.workItem, "spec.md");
-fs.writeFileSync(path.join(ws, specRelPath), "# Requirements and Design Specification\\n\\n## Traceability to frozen intent\\n");
-cp.execFileSync("git", ["add", "--force", "--", specRelPath], { cwd: ws });
-cp.execFileSync("git", ["commit", "-m", "spec: INT-MF-0042"], { cwd: ws });
-const specCommit = cp.execFileSync("git", ["rev-parse", "HEAD"], { cwd: ws }).toString().trim();
-process.stdout.write(JSON.stringify({
-  runId: request.runId, workItem: request.workItem, status: "spec_ready",
-  summary: "Specification produced from the frozen intent.",
-  branch: request.target.branch, workspace: ws, intentCommit: request.intent.commit,
-  frozenArtifactSha256: request.intent.frozenArtifactSha256, intentContentSha256: request.intent.contentSha256,
-  specCommit, specPath: specRelPath.replace(/\\\\/g, "/"), specVersion: 1,
-  blockingConcerns: [], nonBlockingConcerns: [], humanDecisions: [],
-}));
-`;
+const PATH = "products/mealflow/intents/INT-MF-0042/intent.md";
+const COMMIT = "a".repeat(40);
+const HASH = "d".repeat(64);
 
 function initTargetRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "spec-e2e-target-"));
@@ -57,9 +31,6 @@ function initTargetRepo(): string {
   git("commit", "-m", "initial");
   return dir;
 }
-
-const COMMIT = "a".repeat(40);
-const HASH = "d".repeat(64);
 
 function intentMarkdown(): string {
   return [
@@ -102,60 +73,99 @@ function card(): TrelloCard {
   };
 }
 
-test("card metadata + frozen intent -> worktree -> agent -> route to Design Review", async () => {
+async function runPipeline(targetRepo: string, workspaceRoot: string) {
+  const resolved = await resolveSpecRequest(card(), {
+    githubApiBase: "https://api.github.com",
+    githubToken: "",
+    approvedBy: "Sobe",
+    approvedAt: "2026-09-06T09:00:00.000Z",
+    fetchFn: (async () => new Response(intentMarkdown())) as typeof fetch,
+  });
+
+  const workspace = await prepareSpecWorkspace({
+    targetRepo,
+    workspaceRoot,
+    intentId: resolved.intentId,
+    frozenIntentBytes: resolved.frozenIntentBytes,
+  });
+
+  const request: SpecDesignRequest = {
+    runId: "e2e-run-1",
+    workItem: resolved.intentId,
+    productId: resolved.productId,
+    intent: {
+      repository: resolved.intentRepository,
+      commit: resolved.intentCommit,
+      path: resolved.intentPath,
+      frozenArtifactSha256: workspace.frozenArtifactSha256,
+      contentSha256: resolved.intentContentSha256,
+    },
+    target: {
+      repository: targetRepo,
+      baseCommit: workspace.baseCommit,
+      branch: workspace.branch,
+      workspace: CONTAINER_WORKSPACE,
+    },
+    approval: { readyForPlanning: true, approvedBy: resolved.approvedBy, approvedAt: resolved.approvedAt },
+  };
+
+  const run = await runSpecDesignAgent(request, {
+    hostWorkspace: workspace.path,
+    docker: ["node", FAKE_DOCKER],
+    image: "spec-design-agent:local",
+    provider: "mock",
+    envFile: null,
+  });
+
+  return { workspace, run, route: routeSpecResult(run) };
+}
+
+test("card -> frozen intent -> clone -> container -> Design Review", async () => {
   const targetRepo = initTargetRepo();
-  const worktreeRoot = mkdtempSync(join(tmpdir(), "spec-e2e-roots-"));
-  const agentDir = mkdtempSync(join(tmpdir(), "spec-e2e-agent-"));
-  const agentPath = join(agentDir, "agent.cjs");
-  writeFileSync(agentPath, AGENT_SOURCE, "utf8");
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "spec-e2e-roots-"));
+  process.env.FAKE_DOCKER_MODE = "spec_ready";
 
   try {
-    const markdown = intentMarkdown();
-    const resolved = await resolveSpecRequest(card(), {
-      githubApiBase: "https://api.github.com",
-      githubToken: "",
-      approvedBy: "Sobe",
-      approvedAt: "2026-09-06T09:00:00.000Z",
-      fetchFn: (async () => new Response(markdown)) as typeof fetch,
-    });
+    const { workspace, run, route } = await runPipeline(targetRepo, workspaceRoot);
 
-    const workspace = await prepareSpecWorkspace({
-      targetRepo,
-      worktreeRoot,
-      intentId: resolved.intentId,
-      frozenIntentBytes: resolved.frozenIntentBytes,
-    });
-
-    const request: SpecDesignRequest = {
-      runId: "e2e-run-1",
-      workItem: resolved.intentId,
-      productId: resolved.productId,
-      intent: {
-        repository: resolved.intentRepository,
-        commit: resolved.intentCommit,
-        path: resolved.intentPath,
-        frozenArtifactSha256: workspace.frozenArtifactSha256,
-        contentSha256: resolved.intentContentSha256,
-      },
-      target: { repository: targetRepo, baseCommit: workspace.baseCommit, branch: workspace.branch, workspace: workspace.path },
-      approval: { readyForPlanning: true, approvedBy: resolved.approvedBy, approvedAt: resolved.approvedAt },
-    };
-
-    const run = await runSpecDesignAgent(request, { provider: "mock", command: ["node", agentPath] });
     assert.equal(run.result?.status, "spec_ready", run.rawStdout + run.rawStderr);
-
-    const route = routeSpecResult(run);
     assert.equal(route.destination, "design-review");
     assert.match(route.comment, /\.agent\/work\/INT-MF-0042\/spec\.md/);
 
+    assert.ok(existsSync(join(workspace.path, ".agent", "work", "INT-MF-0042", "spec.md")));
     const log = execFileSync("git", ["log", "--oneline"], { cwd: workspace.path }).toString().trim().split("\n");
     assert.match(log[0], /spec: INT-MF-0042/);
     assert.match(log[1], /freeze intent for INT-MF-0042/);
-    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: workspace.path }).toString().trim();
-    assert.equal(branch, "work/INT-MF-0042");
+    assert.equal(
+      execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: workspace.path }).toString().trim(),
+      "work/INT-MF-0042",
+    );
+    // The product repository itself is untouched by the Spec & Design stage.
+    assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: targetRepo }).toString().trim(), "");
   } finally {
+    delete process.env.FAKE_DOCKER_MODE;
     rmSync(targetRepo, { recursive: true, force: true });
-    rmSync(worktreeRoot, { recursive: true, force: true });
-    rmSync(agentDir, { recursive: true, force: true });
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("card -> frozen intent -> clone -> container -> Human Decision Required", async () => {
+  const targetRepo = initTargetRepo();
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "spec-e2e-roots-"));
+  process.env.FAKE_DOCKER_MODE = "needs_decision";
+
+  try {
+    const { workspace, run, route } = await runPipeline(targetRepo, workspaceRoot);
+
+    assert.equal(run.exitCode, 10);
+    assert.equal(route.destination, "human-decision");
+    assert.match(route.comment, /Which service owns meal-plan persistence\?/);
+    assert.match(route.comment, /Product engineering lead/);
+    // No spec is committed when a decision is outstanding.
+    assert.ok(!existsSync(join(workspace.path, ".agent", "work", "INT-MF-0042", "spec.md")));
+  } finally {
+    delete process.env.FAKE_DOCKER_MODE;
+    rmSync(targetRepo, { recursive: true, force: true });
+    rmSync(workspaceRoot, { recursive: true, force: true });
   }
 });

@@ -1,9 +1,9 @@
-// ABOUTME: Tests that the Spec & Design worktree is created, freezes intent.md, and is idempotent.
+// ABOUTME: Tests that the Spec & Design workspace is a self-contained clone with the frozen intent committed.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prepareSpecWorkspace } from "./specWorkspace.js";
@@ -21,37 +21,48 @@ function initRepo(): string {
   return dir;
 }
 
-test("prepareSpecWorkspace creates work/<id>, freezes intent.md, and is idempotent", async () => {
+test("prepareSpecWorkspace clones work/<id>, freezes intent.md, and is idempotent", async () => {
   const targetRepo = initRepo();
-  const worktreeRoot = mkdtempSync(join(tmpdir(), "spec-workspace-roots-"));
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "spec-workspace-roots-"));
   const frozenIntentBytes = Buffer.from("---\nintent_id: INT-MF-0042\nstatus: Frozen\n---\n\n# Intent\n");
   const intentId = "INT-MF-0042";
 
   try {
-    const first = await prepareSpecWorkspace({ targetRepo, worktreeRoot, intentId, frozenIntentBytes });
+    const first = await prepareSpecWorkspace({ targetRepo, workspaceRoot, intentId, frozenIntentBytes });
 
     assert.equal(first.created, true);
     assert.equal(first.branch, "work/INT-MF-0042");
     assert.match(first.baseCommit, /^[0-9a-f]{40}$/);
     assert.equal(first.frozenArtifactSha256, createHash("sha256").update(frozenIntentBytes).digest("hex"));
 
+    // A container needs a real .git directory, not a worktree link file.
+    assert.ok(statSync(join(first.path, ".git")).isDirectory(), ".git must be a directory so git works inside the container");
+
     const intentFile = join(first.path, ".agent", "work", intentId, "intent.md");
     assert.ok(existsSync(intentFile));
     assert.deepEqual(readFileSync(intentFile), frozenIntentBytes);
 
-    const branchInWorktree = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: first.path }).toString().trim();
-    assert.equal(branchInWorktree, "work/INT-MF-0042");
-    const log = execFileSync("git", ["log", "--oneline"], { cwd: first.path }).toString().trim().split("\n");
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: first.path }).toString().trim();
+    assert.equal(git("rev-parse", "--abbrev-ref", "HEAD"), "work/INT-MF-0042");
+    // The base commit is reachable so the agent can verify it offline.
+    assert.equal(git("rev-parse", `${first.baseCommit}^{commit}`), first.baseCommit);
+    // The host-path origin is removed: the container cannot reach it.
+    assert.equal(git("remote"), "");
+
+    const log = git("log", "--oneline").split("\n");
     assert.equal(log.length, 2);
     assert.match(log[0], /freeze intent for INT-MF-0042/);
 
-    const second = await prepareSpecWorkspace({ targetRepo, worktreeRoot, intentId, frozenIntentBytes });
+    const second = await prepareSpecWorkspace({ targetRepo, workspaceRoot, intentId, frozenIntentBytes });
     assert.equal(second.created, false);
     assert.equal(second.path, first.path);
-    const logAfter = execFileSync("git", ["log", "--oneline"], { cwd: first.path }).toString().trim().split("\n");
-    assert.equal(logAfter.length, 2, "re-entering Spec & Design must not add another freeze commit");
+    assert.equal(
+      execFileSync("git", ["log", "--oneline"], { cwd: first.path }).toString().trim().split("\n").length,
+      2,
+      "re-entering Spec & Design must not add another freeze commit",
+    );
   } finally {
     rmSync(targetRepo, { recursive: true, force: true });
-    rmSync(worktreeRoot, { recursive: true, force: true });
+    rmSync(workspaceRoot, { recursive: true, force: true });
   }
 });

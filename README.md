@@ -6,7 +6,7 @@ entering one of three lists:
 
 | Card enters | Conductor runs | On success moves to |
 | --- | --- | --- |
-| **Spec & Design** | [spec-design-agent](https://github.com/dbacks95fan/spec-design-agent) (frozen intent → `spec.md`) | Design Review |
+| **Spec & Design** | [spec-design-agent](https://github.com/dbacks95fan/spec-design-agent) container (frozen intent → `spec.md`) | Design Review |
 | **Ready for Agent** | [coding-agent](https://github.com/dbacks95fan/coding-agent) (Work Contract → candidate) | Agent Review |
 | **Agent Review** | the NAS Evaluator (candidate Git revision → structured result) | Human Approval / Human Decision Required |
 
@@ -40,12 +40,12 @@ src/
 │   ├── wip.ts                   WIP limit check against TRELLO_LIST_WORKING
 │   ├── contractFromCard.ts      deterministic card-description -> Work Contract parser
 │   ├── specRequestFromCard.ts   card metadata + intent-backlog fetch -> Spec & Design request
-│   ├── specWorkspace.ts         creates work/<intent-id> worktree, freezes intent.md into it
+│   ├── specWorkspace.ts         clones work/<intent-id>, freezes intent.md into it
 │   └── specRouting.ts           Spec & Design result -> board destination + decision brief
 ├── codingAgent/
 │   └── runCodingAgent.ts        spawns the coding-agent CLI as a subprocess
 ├── specDesignAgent/
-│   └── runSpecDesignAgent.ts    spawns the spec-design-agent bounded job as a subprocess
+│   └── runSpecDesignAgent.ts    runs the spec-design-agent image as a one-shot container
 └── evaluatorAgent/
     ├── gitHandoff.ts            commits + pushes immutable evaluator artifacts
     └── remote.ts                authenticated request to the NAS Evaluator
@@ -69,14 +69,38 @@ engineering-stage handler for that work item:
    the pinned `Intent Commit` through the GitHub contents API, and refuses to
    continue if the card projection and the canonical frontmatter disagree on
    `intent_id`, `product_id`, `intent_version`, `status`, or `intent_hash`.
-3. It creates the isolated `work/<intent-id>` worktree in `TARGET_REPO` off the
-   current default-branch HEAD, writes the frozen bytes to
+3. It creates the isolated `work/<intent-id>` workspace under
+   `SPEC_WORKSPACE_ROOT` — a **full local clone** of `TARGET_REPO` with the work
+   branch checked out at the current HEAD — writes the frozen bytes to
    `.agent/work/<intent-id>/intent.md`, commits them on the work branch, and
    computes their raw-byte `frozenArtifactSha256` (`src/workflow/specWorkspace.ts`).
+   A clone rather than a `git worktree`: a worktree's `.git` is a link file
+   holding an absolute host path, which does not resolve inside a container.
 4. It builds a request per `spec-design-agent/schemas/spec-request.schema.json`
-   (`runId`, `workItem`, `productId`, `intent`, `target`, `approval`) and spawns
-   the Spec & Design Agent as a bounded subprocess:
-   `<SPEC_DESIGN_AGENT_CLI> spec --request <file> --provider <provider>`.
+   (`runId`, `workItem`, `productId`, `intent`, `target`, `approval`), writes it
+   into the workspace, and runs the agent as a one-shot Docker container with the
+   workspace bind-mounted at `/work` (`src/specDesignAgent/runSpecDesignAgent.ts`):
+
+   ```
+   docker run --rm --mount type=bind,source=<workspace>,target=/work \
+     --read-only --tmpfs /tmp -e HOME=/tmp -e SPEC_AGENT_PROVIDER=<provider> \
+     -e GIT_CONFIG_COUNT=3 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/work \
+     -e GIT_CONFIG_KEY_1=user.email -e GIT_CONFIG_KEY_2=user.name ... \
+     --security-opt no-new-privileges:true --cap-drop ALL \
+     --env-file <runtime.env> <image> spec --request /work/spec-design-request.json
+   ```
+
+   The flags mirror the hardening in `spec-design-agent/compose.yaml`. The
+   request's `target.workspace` is `/work`, not the host path, because the agent
+   resolves it from inside the container. A run that overruns
+   `SPEC_DESIGN_AGENT_TIMEOUT_MS` is killed and reported as a timeout.
+
+   The `GIT_CONFIG_*` variables are load-bearing, not decoration: without
+   `safe.directory=/work` git aborts with *"detected dubious ownership in
+   repository at '/work'"* when the container's non-root uid does not own the
+   bind-mounted files, which would stop the agent at its first workspace check.
+   Setting them by environment avoids needing a writable `HOME` or rootfs. A `-c`
+   flag from the agent still takes precedence.
 5. It routes on the agent's result (`src/workflow/specRouting.ts`):
    `spec_ready` → move to `TRELLO_LIST_DESIGN_REVIEW` with a decision brief;
    `needs_decision` → move to `TRELLO_LIST_HUMAN_DECISION` with the itemised
@@ -169,15 +193,25 @@ must set `EVALUATOR_ALLOWED_REPOSITORY_URL` to the candidate repository’s HTTP
 credential in the NAS runtime environment. Do not store credentials in this
 repository.
 
-For the Spec & Design trigger, set `SPEC_DESIGN_AGENT_CLI` to the command that
-runs the [spec-design-agent](https://github.com/dbacks95fan/spec-design-agent)
-bounded job (see `.env.example`), and put a `GITHUB_TOKEN` with read access to
-the private `intent-backlog` repository in the same shared runtime file. Add the
+For the Spec & Design trigger, build and deploy the agent image on this host from
+the [spec-design-agent](https://github.com/dbacks95fan/spec-design-agent) repo:
+
+```
+cd ../spec-design-agent
+cp .env.example .runtime.env   # fill in ANTHROPIC_API_KEY for the claude provider
+docker compose build           # tags spec-design-agent:local
+```
+
+Then in the orchestrator: point `SPEC_DESIGN_AGENT_IMAGE` at that tag (it is the
+default), point `SPEC_DESIGN_AGENT_RUNTIME_ENV` at the `.runtime.env` you just
+created (also the default), and put a `GITHUB_TOKEN` with read access to the
+private `intent-backlog` repository in the shared runtime file. Add the
 `Spec & Design` and `Design Review` lists to the board (or point
-`TRELLO_LIST_SPEC_DESIGN` / `TRELLO_LIST_DESIGN_REVIEW` at your names). Until
-`SPEC_DESIGN_AGENT_CLI` is set, a card entering Spec & Design gets an
-explanatory card comment and stays put; the coding and evaluation triggers are
-unaffected.
+`TRELLO_LIST_SPEC_DESIGN` / `TRELLO_LIST_DESIGN_REVIEW` at your names).
+
+The orchestrator never builds the image — if Docker is not running or the image
+is missing, the card gets a comment saying so and stays in Spec & Design; the
+coding and evaluation triggers are unaffected.
 
 ## Known limitations (v0.1, on purpose)
 

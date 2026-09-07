@@ -41,3 +41,45 @@ in the README, out of scope here.
 Pre-existing unrelated failure still red: `src/runtimeConfig.test.ts` asserts a
 POSIX path and fails on Windows (`C:\workspace\...` vs `\workspace\...`). Not
 touched.
+
+Later the same day: the Spec & Design Agent must run as a Docker container
+deployed to this machine, not as a local subprocess. Two consequences worth
+recording, because the second one forced a rewrite:
+
+- `runSpecDesignAgent.ts` now shells `docker run --rm` with the workspace
+  bind-mounted at `/work`, replicating the hardening in the agent's own
+  `compose.yaml` (read-only rootfs, tmpfs `/tmp`, `HOME=/tmp`, `cap-drop ALL`,
+  `no-new-privileges`). `SPEC_DESIGN_AGENT_IMAGE` replaces the CLI command; the
+  orchestrator never builds the image. Added a hard timeout that kills the run.
+- **`git worktree` cannot work here.** A worktree's `.git` is a link file
+  holding an absolute host path into the parent repo's `.git/worktrees/`, which
+  does not resolve inside the container — and mounting the parent repo would not
+  fix it, because a Windows host path is meaningless to a Linux container.
+  `specWorkspace.ts` now makes a full local clone instead: self-contained `.git`,
+  all history so `baseCommit` is verifiable offline, and `origin` removed since
+  it points at an unreachable host path. This replaced yesterday's worktree
+  implementation rather than patching it — the constraint changed, not the code.
+
+`target.workspace` in the request is `/work`, not the host path: the agent
+resolves it from inside the container. The request file is written into the
+workspace as `spec-design-request.json` and removed after the run.
+
+Tests use a `fake-docker.cjs` fixture standing in for the docker CLI, so unit,
+integration, and e2e stay hermetic and offline. A real-daemon run against the
+built image is still a deployment-verification step, not something the suite
+covers.
+
+Probed the flag set against the real daemon rather than trusting it, and caught
+a defect the hermetic tests could never have found: git aborts with **"detected
+dubious ownership in repository at '/work'"** when the container's non-root uid
+does not own the bind-mounted files. The agent would have died at its first
+workspace check, every time. Fixed by passing `safe.directory=/work` plus a
+commit identity through `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` /
+`GIT_CONFIG_VALUE_n`, which needs neither a writable HOME nor a writable rootfs.
+Re-verified against the daemon: status, branch resolution, staging, commit, and
+author identity all work under `--read-only` as uid 10001.
+
+Also dropped a redundant `--workdir /app` — the image already sets it. (It first
+showed up as a bogus `C:/Program Files/Git/app` because Git Bash rewrote the
+path in my manual probe; Node's `spawn` does no such conversion, so it was never
+a product bug, just a misleading test artifact.)

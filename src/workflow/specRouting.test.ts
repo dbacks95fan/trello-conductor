@@ -5,7 +5,7 @@ import type { SpecDesignResult } from "../specDesignAgent/runSpecDesignAgent.js"
 import { routeSpecResult } from "./specRouting.js";
 
 function run(result: Record<string, unknown> | null, extra: Partial<SpecDesignResult> = {}): SpecDesignResult {
-  return { exitCode: 0, result, rawStdout: "", rawStderr: "", ...extra };
+  return { exitCode: 0, result, rawStdout: "", rawStderr: "", timedOut: false, ...extra };
 }
 
 test("spec_ready routes to Design Review and cites the committed spec", () => {
@@ -64,11 +64,19 @@ test("failed keeps the card in place and explains retry", () => {
   assert.match(route.comment, /back into Spec & Design/);
 });
 
-test("an unparseable run keeps the card in place and quotes diagnostics", () => {
+test("an unparseable run keeps the card in place and points at the container", () => {
   const route = routeSpecResult(run(null, { exitCode: 1, rawStderr: "Traceback: boom" }));
   assert.equal(route.destination, null);
   assert.match(route.comment, /no parseable result/i);
+  assert.match(route.comment, /Docker is running/);
   assert.match(route.comment, /Traceback: boom/);
+});
+
+test("a timed-out container keeps the card in place and says so", () => {
+  const route = routeSpecResult(run(null, { exitCode: null, timedOut: true, rawStderr: "still generating" }));
+  assert.equal(route.destination, null);
+  assert.match(route.comment, /time budget/i);
+  assert.match(route.comment, /still generating/);
 });
 
 test("an unknown status is surfaced without moving the card", () => {

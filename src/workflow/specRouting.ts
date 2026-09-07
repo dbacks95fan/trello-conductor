@@ -16,11 +16,22 @@ function list(items: unknown, bullet = "-"): string {
 /** The Conductor owns the transition; this only decides which one and what to
  *  say. It never routes past Design Review — approval is always a human step. */
 export function routeSpecResult(run: SpecDesignResult): SpecRoute {
+  if (run.timedOut) {
+    return {
+      destination: null,
+      comment:
+        "⏱️ The Spec & Design Agent container exceeded its time budget and was killed. " +
+        "The card stays in Spec & Design.\n\n```\n" +
+        `${run.rawStderr.slice(-1000)}\n\`\`\``,
+    };
+  }
+
   if (!run.result) {
     return {
       destination: null,
       comment:
         `❌ Spec & Design Agent produced no parseable result (exit code ${run.exitCode ?? "none"}). ` +
+        `Check that Docker is running and the \`spec-design-agent\` image is built on this host. ` +
         `The card stays in Spec & Design for investigation.\n\n\`\`\`\n${run.rawStderr.slice(-1500) || run.rawStdout.slice(-1500)}\n\`\`\``,
     };
   }

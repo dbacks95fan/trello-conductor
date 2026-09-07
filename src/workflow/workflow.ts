@@ -1,7 +1,7 @@
 // ABOUTME: Coordinates spec & design, coding, and remote evaluation transitions for Trello work items.
 import { CardParseError, contractFromCard } from "./contractFromCard.js";
 import { runCodingAgent } from "../codingAgent/runCodingAgent.js";
-import { runSpecDesignAgent, type SpecDesignRequest } from "../specDesignAgent/runSpecDesignAgent.js";
+import { CONTAINER_WORKSPACE, runSpecDesignAgent, type SpecDesignRequest } from "../specDesignAgent/runSpecDesignAgent.js";
 import { resolveSpecRequest, SpecRequestError } from "./specRequestFromCard.js";
 import { routeSpecResult } from "./specRouting.js";
 import { prepareSpecWorkspace } from "./specWorkspace.js";
@@ -242,14 +242,6 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
   const card = await getCard(cardId);
   console.log(`[trello-conductor] Spec & Design for card ${card.idShort} "${card.name}"`);
 
-  if (!config.specDesignAgentCli) {
-    await commentOnCard(
-      cardId,
-      "⚠️ Spec & Design Agent is not configured. Set `SPEC_DESIGN_AGENT_CLI` in the orchestrator environment.",
-    );
-    return;
-  }
-
   let resolved;
   try {
     resolved = await resolveSpecRequest(card, {
@@ -274,14 +266,14 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
   try {
     workspace = await prepareSpecWorkspace({
       targetRepo: config.targetRepo,
-      worktreeRoot: config.worktreeRoot,
+      workspaceRoot: config.specWorkspaceRoot,
       intentId: resolved.intentId,
       frozenIntentBytes: resolved.frozenIntentBytes,
     });
   } catch (err) {
     await commentOnCard(
       cardId,
-      `❌ Could not create the isolated \`work/${resolved.intentId}\` worktree for Spec & Design: ${err instanceof Error ? err.message : String(err)}`,
+      `❌ Could not create the isolated \`work/${resolved.intentId}\` workspace for Spec & Design: ${err instanceof Error ? err.message : String(err)}`,
     );
     return;
   }
@@ -301,7 +293,9 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
       repository: config.targetRepo,
       baseCommit: workspace.baseCommit,
       branch: workspace.branch,
-      workspace: workspace.path,
+      // The agent reads this from inside the container, where the host clone is
+      // bind-mounted at /work.
+      workspace: CONTAINER_WORKSPACE,
     },
     approval: {
       readyForPlanning: true,
@@ -312,10 +306,10 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
 
   await commentOnCard(
     cardId,
-    `🧭 Spec & Design Agent started for \`${request.workItem}\` (run \`${request.runId}\`) on branch \`${workspace.branch}\`.`,
+    `🧭 Spec & Design Agent container started for \`${request.workItem}\` (run \`${request.runId}\`) on branch \`${workspace.branch}\`.`,
   );
 
-  const run = await runSpecDesignAgent(request);
+  const run = await runSpecDesignAgent(request, { hostWorkspace: workspace.path });
   const route = routeSpecResult(run);
   await commentOnCard(cardId, route.comment);
 
