@@ -121,8 +121,11 @@ engineering-stage handler for that work item:
 
 **`approval` is a v0.1 approximation.** `approvedAt` is the intent's `frozen_at`
 when the frontmatter carries it, otherwise the timestamp of the move into Spec &
-Design; `approvedBy` is the Trello member who moved the card. A dedicated
-Ready-for-Planning capture would supply these directly.
+Design; `approvedBy` is the Trello member who moved the card. Capturing the
+freeze at `Prioritized` — where it actually happens — would supply these
+directly. (The request field is named `approval.readyForPlanning` after the
+stage name in `agentic-sdlc/docs/WORKFLOW.md`; this board freezes at
+`Prioritized`, and the two names refer to the same gate.)
 
 **This half follows the canonical model** (intent-backlog repo, `Frozen` status,
 `INT-<PRODUCT>-NNNN` work items, `work/<intent-id>` branch). The existing coding

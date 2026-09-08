@@ -112,7 +112,7 @@ export function parseCardIntentMetadata(card: TrelloCard): CardIntentMetadata {
   }
   if (intentStatus!.toLowerCase() !== "frozen") {
     throw new SpecRequestError(
-      `Intent Status is "${intentStatus}", not "Frozen". A card should only enter Spec & Design after its intent is frozen at Ready for Planning.`,
+      `Intent Status is "${intentStatus}", not "Frozen". An intent is frozen when its card enters Prioritized; only a frozen intent may enter Spec & Design.`,
     );
   }
 
