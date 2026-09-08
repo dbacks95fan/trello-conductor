@@ -68,8 +68,10 @@ function metadataValue(desc: string, label: string): string | undefined {
 
 export function parseCardIntentMetadata(card: TrelloCard): CardIntentMetadata {
   const desc = card.desc ?? "";
+  // `Product: MealFlow (MF)` is the canonical projection, but cards in the wild
+  // also carry the id on its own line as `Product ID: MF`. Both are unambiguous.
   const productLine = metadataValue(desc, "Product");
-  const productId = productLine?.match(/\(([^)]+)\)\s*$/)?.[1]?.trim();
+  const productId = productLine?.match(/\(([^)]+)\)\s*$/)?.[1]?.trim() ?? metadataValue(desc, "Product ID");
   const intentId = metadataValue(desc, "Intent ID");
   const versionRaw = metadataValue(desc, "Intent Version");
   const intentCommit = metadataValue(desc, "Intent Commit")?.toLowerCase();
@@ -78,7 +80,7 @@ export function parseCardIntentMetadata(card: TrelloCard): CardIntentMetadata {
   const canonicalIntentUrl = metadataValue(desc, "Canonical intent");
 
   const missing = Object.entries({
-    "Product (with a parenthesised product ID)": productId,
+    "Product (as `Product: Name (ID)` or `Product ID: ID`)": productId,
     "Intent ID": intentId,
     "Intent Version": versionRaw,
     "Intent Commit": intentCommit,
@@ -187,6 +189,19 @@ function str(value: unknown): string {
   return value == null ? "" : String(value).trim();
 }
 
+/** Reads the first frontmatter key that is present. `agentic-sdlc/docs/ARTIFACTS.md`
+ *  makes `intent_commit` / `intent_hash` canonical and forbids local aliases, but
+ *  existing backlog artifacts were written with `git_commit` / `content_hash`.
+ *  Accepting both keeps the canonical name authoritative while still reading the
+ *  intents that already exist. */
+function frontmatterValue(fm: Record<string, unknown>, ...names: string[]): string {
+  for (const name of names) {
+    const value = str(fm[name]);
+    if (value) return value;
+  }
+  return "";
+}
+
 /** Resolves and integrity-checks the frozen intent a Spec & Design run needs.
  *  Strong disagreements between the card projection and the canonical artifact
  *  throw; softer ones (self-referential commit field, card-id spelling) are
@@ -205,7 +220,7 @@ export async function resolveSpecRequest(
   if (str(fm.product_id) !== meta.productId) mismatches.push(`product_id (card ${meta.productId} vs backlog ${str(fm.product_id) || "missing"})`);
   if (Number(fm.intent_version) !== meta.intentVersion) mismatches.push(`intent_version (card ${meta.intentVersion} vs backlog ${str(fm.intent_version) || "missing"})`);
   if (str(fm.status).toLowerCase() !== "frozen") mismatches.push(`status (backlog status is "${str(fm.status) || "missing"}", not Frozen)`);
-  const backlogHash = str(fm.intent_hash).match(CONTENT_HASH)?.[1];
+  const backlogHash = frontmatterValue(fm, "intent_hash", "content_hash").match(CONTENT_HASH)?.[1];
   if (backlogHash !== meta.intentContentSha256) mismatches.push("intent_hash (card projection and backlog artifact disagree)");
   if (mismatches.length > 0) {
     throw new SpecRequestError(
@@ -214,7 +229,7 @@ export async function resolveSpecRequest(
   }
 
   const warnings: string[] = [];
-  const backlogCommit = str(fm.intent_commit).toLowerCase();
+  const backlogCommit = frontmatterValue(fm, "intent_commit", "git_commit").toLowerCase();
   if (backlogCommit && backlogCommit !== meta.intentCommit) {
     warnings.push(
       `The frozen intent.md records intent_commit ${backlogCommit.slice(0, 12)} but the card pins ${meta.intentCommit.slice(0, 12)}; using the card's commit. This is expected when the hash-bearing commit cannot contain its own SHA.`,

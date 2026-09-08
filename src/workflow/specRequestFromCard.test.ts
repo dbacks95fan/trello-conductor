@@ -176,3 +176,43 @@ test("resolveSpecRequest surfaces a GitHub fetch failure as a SpecRequestError",
     (err: Error) => err instanceof SpecRequestError && /HTTP 404/.test(err.message) && /GITHUB_TOKEN/.test(err.message),
   );
 });
+
+test("parseCardIntentMetadata accepts a card that carries the id as `Product ID:`", () => {
+  // The shape real cards use, seen on the MealFlow board.
+  const desc = description().replace("Product: MealFlow (MF)", "**Product ID:** MF");
+  assert.equal(parseCardIntentMetadata(card(desc)).productId, "MF");
+});
+
+test("parseCardIntentMetadata still prefers the parenthesised canonical form", () => {
+  const desc = `${description()}\nProduct ID: ZZ`;
+  assert.equal(parseCardIntentMetadata(card(desc)).productId, "MF");
+});
+
+test("parseCardIntentMetadata accepts an Intent Hash with no sha256: prefix", () => {
+  const desc = description({ "Intent Hash": "d".repeat(64) });
+  assert.equal(parseCardIntentMetadata(card(desc)).intentContentSha256, "d".repeat(64));
+});
+
+test("resolveSpecRequest reads legacy git_commit / content_hash frontmatter keys", async () => {
+  // Existing backlog artifacts predate the canonical intent_commit / intent_hash
+  // names; both spellings must reconcile against the same card.
+  const legacy = intentMarkdown()
+    .replace("intent_commit:", "git_commit:")
+    .replace("intent_hash:", "content_hash:");
+  const resolved = await resolveSpecRequest(card(description()), {
+    ...baseOptions,
+    fetchFn: stubFetch(legacy),
+  });
+  assert.equal(resolved.intentContentSha256, "d".repeat(64));
+  assert.deepEqual(resolved.warnings, [], "matching legacy keys must not warn");
+});
+
+test("resolveSpecRequest still rejects a genuine hash disagreement under legacy keys", async () => {
+  const legacy = intentMarkdown({ intent_hash: `sha256:${"e".repeat(64)}` })
+    .replace("intent_commit:", "git_commit:")
+    .replace("intent_hash:", "content_hash:");
+  await assert.rejects(
+    resolveSpecRequest(card(description()), { ...baseOptions, fetchFn: stubFetch(legacy) }),
+    (err: Error) => err instanceof SpecRequestError && /intent_hash/.test(err.message),
+  );
+});
