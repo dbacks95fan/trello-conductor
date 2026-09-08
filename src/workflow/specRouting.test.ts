@@ -64,6 +64,25 @@ test("failed keeps the card in place and explains retry", () => {
   assert.match(route.comment, /back into Spec & Design/);
 });
 
+test("a failed run reports why it failed, not just that it did", () => {
+  const route = routeSpecResult(
+    run(
+      {
+        status: "failed",
+        summary: "The generated specification did not meet the structural contract.",
+        blockingConcerns: [
+          "spec.md is missing required section: Validation strategy",
+          "section 'Risks and unresolved decisions' contains an unresolved TODO/decision marker",
+        ],
+      },
+      { exitCode: 30 },
+    ),
+  );
+  assert.match(route.comment, /What failed/);
+  assert.match(route.comment, /missing required section: Validation strategy/);
+  assert.match(route.comment, /unresolved TODO\/decision marker/);
+});
+
 test("an unparseable run keeps the card in place and points at the container", () => {
   const route = routeSpecResult(run(null, { exitCode: 1, rawStderr: "Traceback: boom" }));
   assert.equal(route.destination, null);

@@ -138,6 +138,9 @@ export function routeSpecResult(run: SpecDesignResult): SpecRoute {
         `❌ Spec & Design Agent failed unexpectedly (exit code ${run.exitCode ?? "none"}).`,
         "",
         summary,
+        // The agent reports *why* it failed in blockingConcerns. Dropping them
+        // leaves a paid run with no diagnostic at all.
+        list(result.blockingConcerns) ? `\n**What failed**\n${list(result.blockingConcerns)}` : "",
         usage ? `\n${usage}` : "",
         "\nAutomatic retry is not enabled in v0.1. Move the card out of and back into Spec & Design to retry.",
       ].join("\n"),
