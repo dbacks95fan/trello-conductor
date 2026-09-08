@@ -93,11 +93,21 @@ test("parseCardIntentMetadata rejects a card missing projected metadata", () => 
   assert.throws(() => parseCardIntentMetadata(card(desc)), (err: Error) => err instanceof SpecRequestError && /Intent ID/.test(err.message));
 });
 
-test("parseCardIntentMetadata rejects an intent that is not frozen", () => {
-  assert.throws(
-    () => parseCardIntentMetadata(card(description({ "Intent Status": "Accepted" }))),
-    (err: Error) => err instanceof SpecRequestError && /Frozen/.test(err.message),
-  );
+test("parseCardIntentMetadata does not gate on a frozen intent", () => {
+  // The freeze protocol still exists in agentic-sdlc/docs, but the workflow no
+  // longer requires a frozen intent to enter Spec & Design.
+  for (const status of ["New Ideas", "Refining", "Accepted", "Frozen"]) {
+    const meta = parseCardIntentMetadata(card(description({ "Intent Status": status })));
+    assert.equal(meta.intentStatus, status);
+    assert.equal(meta.intentId, "INT-MF-0042");
+  }
+});
+
+test("parseCardIntentMetadata accepts a card with no Intent Status at all", () => {
+  const desc = description().split("\n").filter((line) => !line.startsWith("Intent Status:")).join("\n");
+  const meta = parseCardIntentMetadata(card(desc));
+  assert.equal(meta.intentStatus, "");
+  assert.equal(meta.intentId, "INT-MF-0042");
 });
 
 test("parseCardIntentMetadata rejects a malformed commit or hash", () => {
@@ -214,5 +224,36 @@ test("resolveSpecRequest still rejects a genuine hash disagreement under legacy 
   await assert.rejects(
     resolveSpecRequest(card(description()), { ...baseOptions, fetchFn: stubFetch(legacy) }),
     (err: Error) => err instanceof SpecRequestError && /intent_hash/.test(err.message),
+  );
+});
+
+test("resolveSpecRequest proceeds for an intent that is not frozen", async () => {
+  const resolved = await resolveSpecRequest(card(description({ "Intent Status": "New Ideas" })), {
+    ...baseOptions,
+    fetchFn: stubFetch(intentMarkdown({ status: "New Ideas" })),
+  });
+  assert.equal(resolved.intentId, "INT-MF-0042");
+  assert.deepEqual(resolved.warnings, [], "agreeing on a non-frozen status is not worth a warning");
+});
+
+test("resolveSpecRequest warns, but does not fail, when card and backlog status disagree", async () => {
+  const resolved = await resolveSpecRequest(card(description({ "Intent Status": "Frozen" })), {
+    ...baseOptions,
+    fetchFn: stubFetch(intentMarkdown({ status: "New Ideas" })),
+  });
+  assert.equal(resolved.intentId, "INT-MF-0042");
+  assert.equal(resolved.warnings.length, 1);
+  assert.match(resolved.warnings[0], /Intent Status "Frozen".*"New Ideas"/);
+});
+
+test("identity and hash disagreements are still hard failures", async () => {
+  // Relaxing the freeze gate must not relax integrity.
+  await assert.rejects(
+    resolveSpecRequest(card(description()), { ...baseOptions, fetchFn: stubFetch(intentMarkdown({ intent_id: "INT-MF-9999" })) }),
+    SpecRequestError,
+  );
+  await assert.rejects(
+    resolveSpecRequest(card(description()), { ...baseOptions, fetchFn: stubFetch(intentMarkdown({ intent_hash: `sha256:${"e".repeat(64)}` })) }),
+    SpecRequestError,
   );
 });

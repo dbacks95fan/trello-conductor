@@ -6,7 +6,7 @@ entering one of three lists:
 
 | Card enters | Conductor runs | On success moves to |
 | --- | --- | --- |
-| **Spec & Design** | [spec-design-agent](https://github.com/dbacks95fan/spec-design-agent) container (frozen intent → `spec.md`) | Design Review |
+| **Spec & Design** | [spec-design-agent](https://github.com/dbacks95fan/spec-design-agent) container (intent → `spec.md`) | Design Review |
 | **Ready for Build** | [coding-agent](https://github.com/dbacks95fan/coding-agent) (Work Contract → candidate) | Agent Review |
 | **Agent Review** | the NAS Evaluator (candidate Git revision → structured result) | Human Approval |
 
@@ -62,13 +62,17 @@ When a card enters `TRELLO_LIST_SPEC_DESIGN` the orchestrator acts as the first
 engineering-stage handler for that work item:
 
 1. It reads the intent projection the Intent Creation Skill writes onto the card
-   description — `Product`, `Intent ID`, `Intent Version`, `Intent Commit`,
-   `Intent Hash`, `Intent Status`, `Canonical intent`
-   (`src/workflow/specRequestFromCard.ts`). `Intent Status` must be `Frozen`.
+   description — `Product` (or `Product ID`), `Intent ID`, `Intent Version`,
+   `Intent Commit`, `Intent Hash`, `Canonical intent`
+   (`src/workflow/specRequestFromCard.ts`). `Intent Status` is read when present
+   but is **not** gated on: this workflow does not require a frozen intent to
+   enter Spec & Design. The freeze protocol remains described in
+   `agentic-sdlc/docs/WORKFLOW.md`; it is simply not enforced here.
 2. It fetches the exact `intent.md` bytes from the `intent-backlog` repository at
    the pinned `Intent Commit` through the GitHub contents API, and refuses to
    continue if the card projection and the canonical frontmatter disagree on
-   `intent_id`, `product_id`, `intent_version`, `status`, or `intent_hash`.
+   `intent_id`, `product_id`, `intent_version`, or `intent_hash`. A status
+   disagreement is surfaced as a warning rather than a refusal.
 3. It creates the isolated `work/<intent-id>` workspace under
    `SPEC_WORKSPACE_ROOT` — a **full local clone** of `TARGET_REPO` with the work
    branch checked out at the current HEAD — writes the frozen bytes to
@@ -127,7 +131,7 @@ directly. (The request field is named `approval.readyForPlanning` after the
 stage name in `agentic-sdlc/docs/WORKFLOW.md`; this board freezes at
 `Prioritized`, and the two names refer to the same gate.)
 
-**This half follows the canonical model** (intent-backlog repo, `Frozen` status,
+**This half follows the canonical model** (intent-backlog repo,
 `INT-<PRODUCT>-NNNN` work items, `work/<intent-id>` branch). The existing coding
 and evaluation triggers still use the older board vocabulary and derive
 `TRELLO-<idShort>` work items from an intent committed in `TARGET_REPO`; the two

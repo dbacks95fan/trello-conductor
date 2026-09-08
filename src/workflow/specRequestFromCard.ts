@@ -1,9 +1,9 @@
-// ABOUTME: Resolves a Spec & Design work request from a Trello card and the frozen intent in intent-backlog.
+// ABOUTME: Resolves a Spec & Design work request from a Trello card and the intent in intent-backlog.
 import type { TrelloCard } from "../trello/client.js";
 import { createHash } from "node:crypto";
 import { parse as parseYaml } from "yaml";
 
-/** Raised when a card in Spec & Design does not carry a usable, frozen intent
+/** Raised when a card in Spec & Design does not carry a usable intent
  *  reference. The workflow turns this into a card comment and leaves the card
  *  in place rather than starting the agent from a guess. */
 export class SpecRequestError extends Error {}
@@ -85,7 +85,6 @@ export function parseCardIntentMetadata(card: TrelloCard): CardIntentMetadata {
     "Intent Version": versionRaw,
     "Intent Commit": intentCommit,
     "Intent Hash": hashRaw,
-    "Intent Status": intentStatus,
     "Canonical intent": canonicalIntentUrl,
   })
     .filter(([, value]) => !value)
@@ -110,19 +109,16 @@ export function parseCardIntentMetadata(card: TrelloCard): CardIntentMetadata {
   if (!contentHash) {
     throw new SpecRequestError(`Intent Hash "${hashRaw}" is not a sha256 content hash.`);
   }
-  if (intentStatus!.toLowerCase() !== "frozen") {
-    throw new SpecRequestError(
-      `Intent Status is "${intentStatus}", not "Frozen". An intent is frozen when its card enters Prioritized; only a frozen intent may enter Spec & Design.`,
-    );
-  }
-
+  // Intent Status is read for reconciliation but not gated on: the workflow does
+  // not require a frozen intent to enter Spec & Design. The freeze protocol still
+  // exists in agentic-sdlc/docs; it is simply not enforced here.
   return {
     productId: productId!,
     intentId: intentId!,
     intentVersion,
     intentCommit: intentCommit!,
     intentContentSha256: contentHash,
-    intentStatus: intentStatus!,
+    intentStatus: intentStatus ?? "",
     canonicalIntentUrl: canonicalIntentUrl!,
   };
 }
@@ -219,7 +215,6 @@ export async function resolveSpecRequest(
   if (str(fm.intent_id) !== meta.intentId) mismatches.push(`intent_id (card ${meta.intentId} vs backlog ${str(fm.intent_id) || "missing"})`);
   if (str(fm.product_id) !== meta.productId) mismatches.push(`product_id (card ${meta.productId} vs backlog ${str(fm.product_id) || "missing"})`);
   if (Number(fm.intent_version) !== meta.intentVersion) mismatches.push(`intent_version (card ${meta.intentVersion} vs backlog ${str(fm.intent_version) || "missing"})`);
-  if (str(fm.status).toLowerCase() !== "frozen") mismatches.push(`status (backlog status is "${str(fm.status) || "missing"}", not Frozen)`);
   const backlogHash = frontmatterValue(fm, "intent_hash", "content_hash").match(CONTENT_HASH)?.[1];
   if (backlogHash !== meta.intentContentSha256) mismatches.push("intent_hash (card projection and backlog artifact disagree)");
   if (mismatches.length > 0) {
@@ -229,15 +224,23 @@ export async function resolveSpecRequest(
   }
 
   const warnings: string[] = [];
+  // Status is surfaced, never gated on. The card and the artifact disagreeing about
+  // lifecycle state is worth a reviewer's attention but does not stop the run.
+  const backlogStatus = str(fm.status);
+  if (meta.intentStatus && backlogStatus && backlogStatus.toLowerCase() !== meta.intentStatus.toLowerCase()) {
+    warnings.push(
+      `The card records Intent Status "${meta.intentStatus}" but the canonical intent.md records "${backlogStatus}".`,
+    );
+  }
   const backlogCommit = frontmatterValue(fm, "intent_commit", "git_commit").toLowerCase();
   if (backlogCommit && backlogCommit !== meta.intentCommit) {
     warnings.push(
-      `The frozen intent.md records intent_commit ${backlogCommit.slice(0, 12)} but the card pins ${meta.intentCommit.slice(0, 12)}; using the card's commit. This is expected when the hash-bearing commit cannot contain its own SHA.`,
+      `The canonical intent.md records intent_commit ${backlogCommit.slice(0, 12)} but the card pins ${meta.intentCommit.slice(0, 12)}; using the card's commit. This is expected when the hash-bearing commit cannot contain its own SHA.`,
     );
   }
   const backlogCardId = str(fm.trello_card_id);
   if (backlogCardId && ![card.id, String(card.idShort), card.shortLink].includes(backlogCardId) && !card.url.includes(backlogCardId)) {
-    warnings.push(`The frozen intent.md records trello_card_id "${backlogCardId}" which does not obviously match this card (${card.idShort}).`);
+    warnings.push(`The canonical intent.md records trello_card_id "${backlogCardId}" which does not obviously match this card (${card.idShort}).`);
   }
 
   let approvedAt = options.approvedAt;
