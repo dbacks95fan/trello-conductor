@@ -6,6 +6,7 @@
   "scripts": {
     "test": "node --import tsx --test src/*.test.ts src/**/*.test.ts",
     "build": "tsc -p tsconfig.json",
+    "bootstrap-board": "tsx src/boardBootstrapCli.ts",
     "start": "node dist/server.js",
     "dev": "tsx src/server.ts"
   },

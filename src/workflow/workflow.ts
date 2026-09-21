@@ -139,7 +139,7 @@ async function processCard(cardId: string): Promise<void> {
     evidencePath: join(config.targetRepo, ".agent", "evidence", `${workItem}-${runId}.json`),
   });
   const handoffComment = JSON.stringify(handoff);
-  await commentOnCard(cardId, `${handoffMarker}${handoffComment} -->\n🔎 Independent evaluation is ready from Git revision \`${handoff.revision}\`. Moving this card to Agent Review starts the Evaluator Agent.`);
+  await commentOnCard(cardId, `${handoffMarker}${handoffComment} -->\n🔎 Independent evaluation is ready from Git revision \`${handoff.revision}\`. Moving this card to ${config.listReview} starts the Evaluator Agent.`);
   await moveCard(cardId, reviewListId);
 }
 
@@ -149,7 +149,7 @@ async function evaluateCard(cardId: string): Promise<void> {
   const comments = await getCardComments(cardId);
   const handoffComment = comments.find((comment) => comment.data.text?.startsWith(handoffMarker));
   if (!handoffComment?.data.text) {
-    await commentOnCard(cardId, "⚠️ Agent Review was entered without an evaluator handoff. No evaluator run was started.");
+    await commentOnCard(cardId, `⚠️ ${config.listReview} was entered without an evaluator handoff. No evaluator run was started.`);
     return;
   }
   let handoff: { repositoryUrl?: string; revision?: string; intentPath?: string; contractPath?: string; evidencePath?: string };
@@ -164,7 +164,7 @@ async function evaluateCard(cardId: string): Promise<void> {
     await commentOnCard(cardId, "⚠️ The evaluator handoff is incomplete. No evaluator run was started.");
     return;
   }
-  await commentOnCard(cardId, "🔎 Independent Evaluator Agent started because the card entered Agent Review.");
+  await commentOnCard(cardId, `🔎 Independent Evaluator Agent started because the card entered ${config.listReview}.`);
 
   let evaluated;
   try {
@@ -179,12 +179,12 @@ async function evaluateCard(cardId: string): Promise<void> {
       evidencePath: handoff.evidencePath,
     });
   } catch (err) {
-    await commentOnCard(cardId, `❌ Evaluator could not start: ${err instanceof Error ? err.message : String(err)}. Card remains in Agent Review.`);
+    await commentOnCard(cardId, `❌ Evaluator could not start: ${err instanceof Error ? err.message : String(err)}. Card remains in ${config.listReview}.`);
     return;
   }
 
   if (!evaluated.evaluation) {
-    await commentOnCard(cardId, `❌ Evaluator produced no parseable result (exit code ${evaluated.exitCode}). Card remains in Agent Review for investigation.\n\n\`\`\`\n${evaluated.rawOutput.slice(-1500)}\n\`\`\``);
+    await commentOnCard(cardId, `❌ Evaluator produced no parseable result (exit code ${evaluated.exitCode}). Card remains in ${config.listReview} for investigation.\n\n\`\`\`\n${evaluated.rawOutput.slice(-1500)}\n\`\`\``);
     return;
   }
 
@@ -216,13 +216,13 @@ async function evaluateCard(cardId: string): Promise<void> {
     await moveCard(cardId, humanApprovalListId);
     await commentOnCard(cardId, "✅ Independent evaluation passed. Awaiting Human Approval. Trello Conductor never moves work to Done.");
   } else if (status === "fail") {
-    await commentOnCard(cardId, "↩️ Independent evaluation failed. Findings require implementation rework. Card remains in Agent Review; automatic retry is intentionally not enabled in v0.1.");
+    await commentOnCard(cardId, `↩️ Independent evaluation failed. Findings require implementation rework. Card remains in ${config.listReview}; automatic retry is intentionally not enabled in v0.1.`);
   } else if (status === "needs_decision") {
     const humanDecisionListId = await getListIdByName(config.listHumanDecision);
     await moveCard(cardId, humanDecisionListId);
     await commentOnCard(cardId, "❓ Evaluator requires human judgment. The decision brief above contains the evidence, options, and consequence of waiting.");
   } else {
-    await commentOnCard(cardId, `⚠️ Unknown evaluator status \`${status}\`. Card remains in Agent Review.`);
+    await commentOnCard(cardId, `⚠️ Unknown evaluator status \`${status}\`. Card remains in ${config.listReview}.`);
   }
 }
 

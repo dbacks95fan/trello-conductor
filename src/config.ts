@@ -19,10 +19,12 @@ export const config = {
   trelloToken: required("TRELLO_TOKEN"),
   trelloApiSecret: required("TRELLO_API_SECRET"),
   boardId: required("TRELLO_BOARD_ID"),
+  boardWorkflowTemplate:
+    process.env.TRELLO_WORKFLOW_TEMPLATE ?? resolve(targetRepo, "..", "agentic-sdlc", "templates", "trello-board-workflow.yaml"),
   // Planning completes before build work is admitted, so this trigger cannot spend coding capacity on an unapproved design.
   listReady: process.env.TRELLO_LIST_READY ?? "Ready for Build",
-  listWorking: process.env.TRELLO_LIST_WORKING ?? "Agent Working",
-  listReview: process.env.TRELLO_LIST_REVIEW ?? "Agent Review",
+  listWorking: process.env.TRELLO_LIST_WORKING ?? "Coding",
+  listReview: process.env.TRELLO_LIST_REVIEW ?? "Evaluation",
   listHumanApproval: process.env.TRELLO_LIST_HUMAN_APPROVAL ?? "Human Approval",
   // A decision is a form of human approval in the visible workflow, so one shared list avoids an undocumented side path.
   listHumanDecision: process.env.TRELLO_LIST_HUMAN_DECISION ?? "Human Approval",

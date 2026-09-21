@@ -7,8 +7,8 @@ entering one of three lists:
 | Card enters | Conductor runs | On success moves to |
 | --- | --- | --- |
 | **Spec & Design** | [spec-design-agent](https://github.com/dbacks95fan/spec-design-agent) container (intent → `spec.md`) | Design Review |
-| **Ready for Build** | [coding-agent](https://github.com/dbacks95fan/coding-agent) (Work Contract → candidate) | Agent Review |
-| **Agent Review** | the NAS Evaluator (candidate Git revision → structured result) | Human Approval |
+| **Ready for Build** | [coding-agent](https://github.com/dbacks95fan/coding-agent) (Work Contract → candidate) | Evaluation |
+| **Evaluation** | the NAS Evaluator (candidate Git revision → structured result) | Human Approval |
 
 Stage names follow the canonical lifecycle vocabulary in
 [`agentic-sdlc/docs/WORKFLOW.md`](https://github.com/dbacks95fan/agentic-sdlc/blob/main/docs/WORKFLOW.md).
@@ -22,7 +22,7 @@ has no Trello access at all.
 The evaluator runs remotely on the NAS. When a candidate is complete, Trello
 Conductor verifies the candidate branch is clean, commits the Work Contract and
 evidence to that branch, pushes it, and records the immutable commit SHA in the
-card handoff comment. When the card enters Agent Review, the Evaluator checks
+card handoff comment. When the card enters Evaluation, the Evaluator checks
 out that SHA into temporary container storage, evaluates it, and removes the
 checkout before responding.
 
@@ -224,9 +224,30 @@ docker compose build           # tags spec-design-agent:local
 Then in the orchestrator: point `SPEC_DESIGN_AGENT_IMAGE` at that tag (it is the
 default), point `SPEC_DESIGN_AGENT_RUNTIME_ENV` at the `.runtime.env` you just
 created (also the default), and put a `GITHUB_TOKEN` with read access to the
-private `intent-backlog` repository in the shared runtime file. Add the
-`Spec & Design` and `Design Review` lists to the board (or point
-`TRELLO_LIST_SPEC_DESIGN` / `TRELLO_LIST_DESIGN_REVIEW` at your names).
+private `intent-backlog` repository in the shared runtime file. Provision the
+full canonical board lifecycle with the command below rather than adding
+individual lists by hand.
+
+## Board provisioning
+
+The versioned lifecycle template is owned by
+`agentic-sdlc/templates/trello-board-workflow.yaml`. Use the Conductor to
+inspect a board before changing it:
+
+```
+npm run bootstrap-board -- --dry-run
+```
+
+When the report contains no duplicate or unexpected lists, apply the template:
+
+```
+npm run bootstrap-board -- --apply
+```
+
+The command creates missing lists and establishes the canonical order. It never
+moves or deletes cards. It refuses to apply when an existing list has no
+unambiguous template mapping, so a legacy board cannot lose work through an
+automatic migration.
 
 The orchestrator never builds the image — if Docker is not running or the image
 is missing, the card gets a comment saying so and stays in Spec & Design; the

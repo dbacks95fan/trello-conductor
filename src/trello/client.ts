@@ -19,6 +19,7 @@ async function trelloFetch<T>(path: string, init: RequestInit = {}): Promise<T> 
 export interface TrelloList {
   id: string;
   name: string;
+  pos: number;
 }
 
 export interface TrelloCard {
@@ -57,6 +58,22 @@ export async function getListIdByName(name: string): Promise<string> {
     throw new Error(`No list named "${name}" found on board ${config.boardId}`);
   }
   return found.id;
+}
+
+/** Creates a named board list and invalidates the list cache for subsequent validation. */
+export async function createList(name: string, pos: "top" | "bottom" | number = "bottom"): Promise<TrelloList> {
+  const query = new URLSearchParams({ name, idBoard: await resolveBoardId(), pos: String(pos) });
+  const list = await trelloFetch<TrelloList>(`/lists?${query.toString()}`, { method: "POST" });
+  listCache = null;
+  return list;
+}
+
+/** Repositions a board list without altering the cards it contains. */
+export async function updateListPosition(listId: string, pos: number): Promise<TrelloList> {
+  const query = new URLSearchParams({ pos: String(pos) });
+  const list = await trelloFetch<TrelloList>(`/lists/${listId}?${query.toString()}`, { method: "PUT" });
+  listCache = null;
+  return list;
 }
 
 let realBoardIdCache: string | null = null;
