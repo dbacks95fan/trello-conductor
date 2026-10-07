@@ -19,6 +19,7 @@ export interface PrepareSpecWorkspaceInput {
   workspaceRoot: string;
   intentId: string;
   frozenIntentBytes: Buffer;
+  frozenPolicyProfileBytes: Buffer;
 }
 
 export interface SpecWorkspace {
@@ -70,14 +71,16 @@ export async function prepareSpecWorkspace(input: PrepareSpecWorkspaceInput): Pr
   await git(hasRemote ? ["remote", "set-url", "origin", remoteUrl] : ["remote", "add", "origin", remoteUrl], path);
 
   const relativeIntentPath = join(".agent", "work", input.intentId, "intent.md");
+  const relativePolicyProfilePath = join(".agent", "work", input.intentId, "policy-profile.md");
   await mkdir(join(path, ".agent", "work", input.intentId), { recursive: true });
   await writeFile(join(path, relativeIntentPath), input.frozenIntentBytes);
+  await writeFile(join(path, relativePolicyProfilePath), input.frozenPolicyProfileBytes);
 
   // Plain add, never --force: a product repository must track `.agent/work/` so
   // agent-owned artifacts are ordinary versioned content. If this fails because
   // the path is ignored, the repository's .gitignore is wrong and should say so
   // loudly rather than be overridden here.
-  await git(["add", "--", relativeIntentPath], path);
+  await git(["add", "--", relativeIntentPath, relativePolicyProfilePath], path);
   if ((await git(["diff", "--cached", "--name-only"], path)).length > 0) {
     await git(
       [

@@ -18,6 +18,7 @@ const FAKE_DOCKER = join(here, "__fixtures__", "fake-docker.cjs");
 const PATH = "products/mealflow/intents/INT-MF-0042/intent.md";
 const COMMIT = "a".repeat(40);
 const HASH = "d".repeat(64);
+const PROFILE = "Profile ID: MF-DEFAULT\nVersion: 1\n";
 
 function initTargetRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "spec-e2e-target-"));
@@ -47,6 +48,8 @@ function intentMarkdown(): string {
     "status: Frozen",
     `intent_commit: ${COMMIT}`,
     `intent_hash: sha256:${HASH}`,
+    "policy_profile_id: MF-DEFAULT",
+    "policy_profile_version: 1",
     "frozen_at: 2026-08-01T12:00:00.000Z",
     "---",
     "",
@@ -69,6 +72,8 @@ function card(): TrelloCard {
       `Intent Commit: ${COMMIT}`,
       `Intent Hash: sha256:${HASH}`,
       "Intent Status: Frozen",
+      "Policy Profile ID: MF-DEFAULT",
+      "Policy Profile Version: 1",
       `Canonical intent: https://github.com/dbacks95fan/intent-backlog/blob/${COMMIT}/${PATH}`,
     ].join("\n"),
     idList: "list-spec",
@@ -83,7 +88,12 @@ async function runPipeline(targetRepo: string, workspaceRoot: string) {
     githubToken: "",
     approvedBy: "Sobe",
     approvedAt: "2026-09-06T09:00:00.000Z",
-    fetchFn: (async () => new Response(intentMarkdown())) as typeof fetch,
+    fetchFn: (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/product.yaml?")) return new Response("policy_profiles:\n  MF-DEFAULT: policy-profiles/default.md\n");
+      if (url.includes("/policy-profiles/default.md?")) return new Response(PROFILE);
+      return new Response(intentMarkdown());
+    }) as typeof fetch,
   });
 
   const workspace = await prepareSpecWorkspace({
@@ -91,6 +101,7 @@ async function runPipeline(targetRepo: string, workspaceRoot: string) {
     workspaceRoot,
     intentId: resolved.intentId,
     frozenIntentBytes: resolved.frozenIntentBytes,
+    frozenPolicyProfileBytes: resolved.frozenPolicyProfileBytes,
   });
 
   const request: SpecDesignRequest = {
@@ -104,13 +115,21 @@ async function runPipeline(targetRepo: string, workspaceRoot: string) {
       frozenArtifactSha256: workspace.frozenArtifactSha256,
       contentSha256: resolved.intentContentSha256,
     },
+    policyProfile: {
+      repository: resolved.intentRepository,
+      commit: resolved.intentCommit,
+      path: resolved.policyProfilePath,
+      profileId: resolved.policyProfileId,
+      version: resolved.policyProfileVersion,
+      frozenArtifactSha256: resolved.policyProfileContentSha256,
+    },
     target: {
       repository: targetRepo,
       baseCommit: workspace.baseCommit,
       branch: workspace.branch,
       workspace: CONTAINER_WORKSPACE,
     },
-    approval: { readyForPlanning: true, approvedBy: resolved.approvedBy, approvedAt: resolved.approvedAt },
+    approval: { prioritized: true, approvedBy: resolved.approvedBy, approvedAt: resolved.approvedAt },
   };
 
   const run = await runSpecDesignAgent(request, {
@@ -124,7 +143,7 @@ async function runPipeline(targetRepo: string, workspaceRoot: string) {
   return { workspace, run, route: routeSpecResult(run) };
 }
 
-test("card -> frozen intent -> clone -> container -> Design Review", async () => {
+test("card -> frozen intent/profile -> clone -> container -> human review", async () => {
   const targetRepo = initTargetRepo();
   const workspaceRoot = mkdtempSync(join(tmpdir(), "spec-e2e-roots-"));
   process.env.FAKE_DOCKER_MODE = "spec_ready";
@@ -133,7 +152,8 @@ test("card -> frozen intent -> clone -> container -> Design Review", async () =>
     const { workspace, run, route } = await runPipeline(targetRepo, workspaceRoot);
 
     assert.equal(run.result?.status, "spec_ready", run.rawStdout + run.rawStderr);
-    assert.equal(route.destination, "design-review");
+    assert.equal(route.destination, null);
+    assert.match(route.comment, /remains in Spec & Design/);
     assert.match(route.comment, /\.agent\/work\/INT-MF-0042\/spec\.md/);
 
     assert.ok(existsSync(join(workspace.path, ".agent", "work", "INT-MF-0042", "spec.md")));
@@ -153,7 +173,7 @@ test("card -> frozen intent -> clone -> container -> Design Review", async () =>
   }
 });
 
-test("card -> frozen intent -> clone -> container -> Human Decision Required", async () => {
+test("card -> frozen intent/profile -> clone -> container -> human decision in Spec & Design", async () => {
   const targetRepo = initTargetRepo();
   const workspaceRoot = mkdtempSync(join(tmpdir(), "spec-e2e-roots-"));
   process.env.FAKE_DOCKER_MODE = "needs_decision";
@@ -162,7 +182,7 @@ test("card -> frozen intent -> clone -> container -> Human Decision Required", a
     const { workspace, run, route } = await runPipeline(targetRepo, workspaceRoot);
 
     assert.equal(run.exitCode, 10);
-    assert.equal(route.destination, "human-decision");
+    assert.equal(route.destination, null);
     assert.match(route.comment, /Which service owns meal-plan persistence\?/);
     assert.match(route.comment, /Product engineering lead/);
     // No spec is committed when a decision is outstanding.

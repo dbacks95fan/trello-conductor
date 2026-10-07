@@ -21,15 +21,13 @@ export const config = {
   boardId: required("TRELLO_BOARD_ID"),
   boardWorkflowTemplate:
     process.env.TRELLO_WORKFLOW_TEMPLATE ?? resolve(targetRepo, "..", "agentic-sdlc", "templates", "trello-board-workflow.yaml"),
-  // Planning completes before build work is admitted, so this trigger cannot spend coding capacity on an unapproved design.
-  listReady: process.env.TRELLO_LIST_READY ?? "Ready for Build",
-  listWorking: process.env.TRELLO_LIST_WORKING ?? "Coding",
+  listNewIdeas: process.env.TRELLO_LIST_NEW_IDEAS ?? "New Ideas",
+  listBacklog: process.env.TRELLO_LIST_BACKLOG ?? "Backlog",
+  listPrioritized: process.env.TRELLO_LIST_PRIORITIZED ?? "Prioritized",
+  listWorking: process.env.TRELLO_LIST_WORKING ?? "Execution",
   listReview: process.env.TRELLO_LIST_REVIEW ?? "Evaluation",
   listHumanApproval: process.env.TRELLO_LIST_HUMAN_APPROVAL ?? "Human Approval",
-  // A decision is a form of human approval in the visible workflow, so one shared list avoids an undocumented side path.
-  listHumanDecision: process.env.TRELLO_LIST_HUMAN_DECISION ?? "Human Approval",
   listSpecDesign: process.env.TRELLO_LIST_SPEC_DESIGN ?? "Spec & Design",
-  listDesignReview: process.env.TRELLO_LIST_DESIGN_REVIEW ?? "Design Review",
   wipLimit: Number(process.env.WIP_LIMIT ?? "1"),
   codingAgentCli: required("CODING_AGENT_CLI"),
   // The Spec & Design Agent runs as a one-shot Docker container on this host.

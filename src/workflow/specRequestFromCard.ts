@@ -25,6 +25,8 @@ interface CardIntentMetadata {
   intentContentSha256: string;
   intentStatus: string;
   canonicalIntentUrl: string;
+  policyProfileId: string;
+  policyProfileVersion: string;
 }
 
 export interface ResolvedSpecRequest {
@@ -39,6 +41,11 @@ export interface ResolvedSpecRequest {
   approvedBy: string;
   approvedAt: string;
   warnings: string[];
+  policyProfileId: string;
+  policyProfileVersion: string;
+  policyProfilePath: string;
+  policyProfileContentSha256: string;
+  frozenPolicyProfileBytes: Buffer;
 }
 
 export interface ResolveSpecRequestOptions {
@@ -78,6 +85,8 @@ export function parseCardIntentMetadata(card: TrelloCard): CardIntentMetadata {
   const hashRaw = metadataValue(desc, "Intent Hash");
   const intentStatus = metadataValue(desc, "Intent Status");
   const canonicalIntentUrl = metadataValue(desc, "Canonical intent");
+  const policyProfileId = metadataValue(desc, "Policy Profile ID");
+  const policyProfileVersion = metadataValue(desc, "Policy Profile Version");
 
   const missing = Object.entries({
     "Product (as `Product: Name (ID)` or `Product ID: ID`)": productId,
@@ -86,6 +95,8 @@ export function parseCardIntentMetadata(card: TrelloCard): CardIntentMetadata {
     "Intent Commit": intentCommit,
     "Intent Hash": hashRaw,
     "Canonical intent": canonicalIntentUrl,
+    "Policy Profile ID": policyProfileId,
+    "Policy Profile Version": policyProfileVersion,
   })
     .filter(([, value]) => !value)
     .map(([name]) => name);
@@ -109,9 +120,8 @@ export function parseCardIntentMetadata(card: TrelloCard): CardIntentMetadata {
   if (!contentHash) {
     throw new SpecRequestError(`Intent Hash "${hashRaw}" is not a sha256 content hash.`);
   }
-  // Intent Status is read for reconciliation but not gated on: the workflow does
-  // not require a frozen intent to enter Spec & Design. The freeze protocol still
-  // exists in agentic-sdlc/docs; it is simply not enforced here.
+  // Intent Status is read for reconciliation but not treated as authorization.
+  // The Conductor enforces the Prioritized freeze before this resolver is called.
   return {
     productId: productId!,
     intentId: intentId!,
@@ -120,6 +130,8 @@ export function parseCardIntentMetadata(card: TrelloCard): CardIntentMetadata {
     intentContentSha256: contentHash,
     intentStatus: intentStatus ?? "",
     canonicalIntentUrl: canonicalIntentUrl!,
+    policyProfileId: policyProfileId!,
+    policyProfileVersion: policyProfileVersion!,
   };
 }
 
@@ -171,6 +183,10 @@ async function fetchFrozenIntent(
   return Buffer.from(await response.arrayBuffer());
 }
 
+async function fetchFrozenFile(location: CanonicalLocation, path: string, ref: string, options: ResolveSpecRequestOptions): Promise<Buffer> {
+  return fetchFrozenIntent({ ...location, path }, ref, options);
+}
+
 function frozenIntentFrontmatter(markdown: string): Record<string, unknown> {
   const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) throw new SpecRequestError("The frozen intent.md has no YAML frontmatter to verify identity against.");
@@ -217,10 +233,31 @@ export async function resolveSpecRequest(
   if (Number(fm.intent_version) !== meta.intentVersion) mismatches.push(`intent_version (card ${meta.intentVersion} vs backlog ${str(fm.intent_version) || "missing"})`);
   const backlogHash = frontmatterValue(fm, "intent_hash", "content_hash").match(CONTENT_HASH)?.[1];
   if (backlogHash !== meta.intentContentSha256) mismatches.push("intent_hash (card projection and backlog artifact disagree)");
+  if (str(fm.policy_profile_id) !== meta.policyProfileId) mismatches.push("policy_profile_id (card projection and backlog artifact disagree)");
+  if (str(fm.policy_profile_version) !== meta.policyProfileVersion) mismatches.push("policy_profile_version (card projection and backlog artifact disagree)");
   if (mismatches.length > 0) {
     throw new SpecRequestError(
       `The Trello card and the canonical intent.md disagree and must be reconciled before Spec & Design starts: ${mismatches.join("; ")}.`,
     );
+  }
+
+  const productMatch = location.path.match(/^(.*?products\/([^/]+))\//);
+  if (!productMatch) throw new SpecRequestError("Canonical intent path must be inside products/<product>/ so the selected policy profile can be resolved.");
+  const productRoot = productMatch[1];
+  const productConfigBytes = await fetchFrozenFile(location, `${productRoot}/product.yaml`, meta.intentCommit, options);
+  const productConfig = parseYaml(productConfigBytes.toString("utf8")) as Record<string, unknown>;
+  const profiles = productConfig.policy_profiles as Record<string, unknown> | undefined;
+  const profileRelativePath = profiles?.[meta.policyProfileId];
+  if (typeof profileRelativePath !== "string" || !profileRelativePath || profileRelativePath.startsWith("/") || profileRelativePath.split("/").includes("..")) {
+    throw new SpecRequestError(`product.yaml does not map policy profile ID "${meta.policyProfileId}" to a safe repository-relative path.`);
+  }
+  const policyProfilePath = `${productRoot}/${profileRelativePath}`;
+  const frozenPolicyProfileBytes = await fetchFrozenFile(location, policyProfilePath, meta.intentCommit, options);
+  const profileText = frozenPolicyProfileBytes.toString("utf8");
+  const profileId = profileText.match(/^Profile ID:\s*(.+?)\s*$/m)?.[1];
+  const profileVersion = profileText.match(/^Version:\s*(.+?)\s*$/m)?.[1];
+  if (profileId !== meta.policyProfileId || profileVersion !== meta.policyProfileVersion) {
+    throw new SpecRequestError("The selected policy profile ID/version does not match its profile document at the pinned intent commit.");
   }
 
   const warnings: string[] = [];
@@ -259,6 +296,11 @@ export async function resolveSpecRequest(
     approvedBy: options.approvedBy,
     approvedAt,
     warnings,
+    policyProfileId: meta.policyProfileId,
+    policyProfileVersion: meta.policyProfileVersion,
+    policyProfilePath,
+    policyProfileContentSha256: frozenArtifactSha256(frozenPolicyProfileBytes),
+    frozenPolicyProfileBytes,
   };
 }
 

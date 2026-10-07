@@ -1,7 +1,7 @@
 // ABOUTME: Maps a Spec & Design Agent result to a board destination and a human-readable decision brief.
 import type { SpecDesignResult } from "../specDesignAgent/runSpecDesignAgent.js";
 
-export type SpecDestination = "design-review" | "human-decision" | null;
+export type SpecDestination = null;
 
 export interface SpecRoute {
   destination: SpecDestination;
@@ -43,8 +43,7 @@ export function formatUsage(usage: unknown): string {
   return `🧾 Usage: ${parts.join(" ")}`;
 }
 
-/** The Conductor owns the transition; this only decides which one and what to
- *  say. It never routes past Design Review — approval is always a human step. */
+/** Design Review happens within Spec & Design; the agent does not advance the card. */
 export function routeSpecResult(run: SpecDesignResult): SpecRoute {
   if (run.timedOut) {
     return {
@@ -74,7 +73,7 @@ export function routeSpecResult(run: SpecDesignResult): SpecRoute {
 
   if (status === "spec_ready") {
     const parts = [
-      `✅ Spec & Design Agent finished: **spec ready for Design Review**.`,
+      `✅ Spec & Design Agent finished: **spec ready for human review**.`,
       "",
       summary,
       "",
@@ -85,9 +84,9 @@ export function routeSpecResult(run: SpecDesignResult): SpecRoute {
     if (usage) parts.push("", usage);
     parts.push(
       "",
-      "Design Review is performed by a human. A successful result means *ready for review*, not approved.",
+      "A human reviews and accepts the specification and implementation plan. The card remains in Spec & Design.",
     );
-    return { destination: "design-review", comment: parts.join("\n") };
+    return { destination: null, comment: parts.join("\n") };
   }
 
   if (status === "needs_decision") {
@@ -105,7 +104,7 @@ export function routeSpecResult(run: SpecDesignResult): SpecRoute {
       })
       .join("\n\n");
     return {
-      destination: "human-decision",
+      destination: null,
       comment: [
         `⏸️ Spec & Design Agent needs a human decision before a specification can be written.`,
         "",

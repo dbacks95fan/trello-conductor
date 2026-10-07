@@ -8,7 +8,7 @@ function run(result: Record<string, unknown> | null, extra: Partial<SpecDesignRe
   return { exitCode: 0, result, rawStdout: "", rawStderr: "", timedOut: false, ...extra };
 }
 
-test("spec_ready routes to Design Review and cites the committed spec", () => {
+test("spec_ready remains in Spec & Design for human review and cites the committed spec", () => {
   const route = routeSpecResult(
     run({
       status: "spec_ready",
@@ -20,14 +20,14 @@ test("spec_ready routes to Design Review and cites the committed spec", () => {
       nonBlockingConcerns: ["Nutrition targets are assumed, not specified."],
     }),
   );
-  assert.equal(route.destination, "design-review");
-  assert.match(route.comment, /ready for Design Review/i);
+  assert.equal(route.destination, null);
+  assert.match(route.comment, /ready for human review/i);
   assert.match(route.comment, /\.agent\/work\/INT-MF-0042\/spec\.md/);
   assert.match(route.comment, /Nutrition targets are assumed/);
-  assert.match(route.comment, /performed by a human/i);
+  assert.match(route.comment, /human reviews/i);
 });
 
-test("needs_decision routes to Human Decision Required with the itemised brief", () => {
+test("needs_decision remains in Spec & Design with the itemised brief", () => {
   const route = routeSpecResult(
     run({
       status: "needs_decision",
@@ -42,7 +42,7 @@ test("needs_decision routes to Human Decision Required with the itemised brief",
       ],
     }),
   );
-  assert.equal(route.destination, "human-decision");
+  assert.equal(route.destination, null);
   assert.match(route.comment, /Which service owns meal-plan persistence\?/);
   assert.match(route.comment, /Reuse the recipe service/);
   assert.match(route.comment, /Product engineering lead/);
@@ -134,7 +134,7 @@ test("a spec_ready comment reports what the run cost", () => {
       usage: { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 1200, turns: 2, costUsd: 0.05 },
     }),
   );
-  assert.equal(route.destination, "design-review");
+  assert.equal(route.destination, null);
   assert.match(route.comment, /🧾 Usage: 1,200 tokens/);
   assert.match(route.comment, /\$0\.05/);
 });
