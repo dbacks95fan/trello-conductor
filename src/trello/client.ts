@@ -24,6 +24,7 @@ export interface TrelloList {
 
 export interface TrelloCard {
   id: string;
+  idBoard?: string;
   idShort: number;
   name: string;
   desc: string;
@@ -49,15 +50,66 @@ export async function getLists(forceRefresh = false): Promise<TrelloList[]> {
 
 export async function getListIdByName(name: string): Promise<string> {
   let lists = await getLists();
-  let found = lists.find((l) => l.name === name);
-  if (!found) {
+  let matches = lists.filter((l) => l.name === name);
+  if (matches.length === 0) {
     lists = await getLists(true); // list may have been created after we cached
-    found = lists.find((l) => l.name === name);
+    matches = lists.filter((l) => l.name === name);
   }
-  if (!found) {
+  if (matches.length === 0) {
     throw new Error(`No list named "${name}" found on board ${config.boardId}`);
   }
-  return found.id;
+  if (matches.length > 1) throw new Error(`Board ${config.boardId} contains more than one list named "${name}".`);
+  return matches[0].id;
+}
+
+export interface WorkflowListIds {
+  newIdeas: string;
+  backlog: string;
+  prioritized: string;
+  specDesign: string;
+  execution: string;
+  evaluation: string;
+  humanApproval: string;
+  release: string;
+  productionObservation: string;
+  done: string;
+}
+
+/** Resolve every canonical workflow list by its configured exact name and reject ambiguity. */
+export async function getWorkflowListIds(): Promise<WorkflowListIds> {
+  const names = [
+    config.listNewIdeas,
+    config.listBacklog,
+    config.listPrioritized,
+    config.listSpecDesign,
+    config.listWorking,
+    config.listReview,
+    config.listHumanApproval,
+    config.listRelease,
+    config.listProductionObservation,
+    config.listDone,
+  ];
+  const lists = await getLists(true);
+  const ids = names.map((name) => {
+    const matches = lists.filter((list) => list.name === name);
+    if (matches.length !== 1) {
+      throw new Error(`Expected exactly one board list named "${name}"; found ${matches.length}.`);
+    }
+    return matches[0].id;
+  });
+  if (new Set(ids).size !== ids.length) throw new Error("Canonical workflow list names must resolve to distinct Trello list IDs.");
+  return {
+    newIdeas: ids[0],
+    backlog: ids[1],
+    prioritized: ids[2],
+    specDesign: ids[3],
+    execution: ids[4],
+    evaluation: ids[5],
+    humanApproval: ids[6],
+    release: ids[7],
+    productionObservation: ids[8],
+    done: ids[9],
+  };
 }
 
 /** Creates a named board list and invalidates the list cache for subsequent validation. */
@@ -92,7 +144,7 @@ export async function getCard(cardId: string): Promise<TrelloCard> {
 }
 
 export async function getCardComments(cardId: string): Promise<TrelloComment[]> {
-  return trelloFetch<TrelloComment[]>(`/cards/${cardId}/actions?filter=commentCard&limit=100`);
+  return trelloFetch<TrelloComment[]>(`/cards/${cardId}/actions?filter=commentCard&limit=1000`);
 }
 
 export async function getCardsInList(listId: string): Promise<TrelloCard[]> {
@@ -139,7 +191,7 @@ export async function createWebhook(callbackURL: string, idModel: string): Promi
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      description: "Trello Conductor: Ready for Agent watcher",
+      description: "Trello Conductor: Agentic SDLC lifecycle transition handler",
       callbackURL,
       idModel,
     }),

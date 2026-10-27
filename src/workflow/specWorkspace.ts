@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 const execFileAsync = promisify(execFile);
 
@@ -98,6 +98,17 @@ export async function prepareSpecWorkspace(input: PrepareSpecWorkspaceInput): Pr
 
   const frozenArtifactSha256 = createHash("sha256").update(input.frozenIntentBytes).digest("hex");
   return { path, branch, baseCommit, frozenArtifactSha256, remoteUrl, created };
+}
+
+/** Read only a committed work artifact so worker working-tree changes cannot masquerade as a published output. */
+export async function readCommittedWorkspaceFile(workspacePath: string, revision: string, relativePath: string): Promise<string> {
+  const absolutePath = resolve(workspacePath, relativePath);
+  const workspaceRelative = relative(workspacePath, absolutePath);
+  if (!/^[0-9a-f]{40,64}$/.test(revision) || !relativePath || isAbsolute(relativePath) || workspaceRelative === ".." || workspaceRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) {
+    throw new Error("Worker artifact path must be a safe workspace-relative path.");
+  }
+  const { stdout } = await execFileAsync("git", ["show", `${revision}:${relativePath.replace(/\\/g, "/")}`], { cwd: workspacePath, windowsHide: true, encoding: "utf8" });
+  return stdout;
 }
 
 /** Git credential configuration that resolves the token from the environment at

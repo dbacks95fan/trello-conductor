@@ -16,6 +16,7 @@ export interface FreezeTuple {
   policyProfileCommit: string;
   policyProfileSha256: string;
   cardId: string;
+  freezeEventId?: string;
   authorizedBy: string;
   frozenAt: string;
 }

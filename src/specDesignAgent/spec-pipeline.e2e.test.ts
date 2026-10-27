@@ -88,9 +88,10 @@ async function runPipeline(targetRepo: string, workspaceRoot: string) {
     githubToken: "",
     approvedBy: "Sobe",
     approvedAt: "2026-09-06T09:00:00.000Z",
+    targetRepositoryUrl: "https://github.com/example/mealflow",
     fetchFn: (async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes("/product.yaml?")) return new Response("policy_profiles:\n  MF-DEFAULT: policy-profiles/default.md\n");
+      if (url.includes("/product.yaml?")) return new Response('schema_version: "1.0"\nproduct_id: MF\nproduct_name: MealFlow\ntrello_board_id: board-1\ntarget_repository: https://github.com/example/mealflow\nauthorized_product_owner_ids:\n  - owner-1\npolicy_profiles:\n  MF-DEFAULT: policy-profiles/default.md\n');
       if (url.includes("/policy-profiles/default.md?")) return new Response(PROFILE);
       return new Response(intentMarkdown());
     }) as typeof fetch,

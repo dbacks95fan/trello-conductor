@@ -13,7 +13,13 @@ export interface CodingAgentResult {
   contractText: string;
 }
 
-export async function runCodingAgent(contract: WorkContract): Promise<CodingAgentResult> {
+export interface CodingAgentRunOptions {
+  repoRoot: string;
+  baseBranch: string;
+  cliPath?: string;
+}
+
+export async function runCodingAgent(contract: WorkContract, options: CodingAgentRunOptions): Promise<CodingAgentResult> {
   const dir = mkdtempSync(join(tmpdir(), "trello-conductor-contract-"));
   const contractPath = join(dir, `${contract.work_item}.yaml`);
   const contractText = stringify(contract);
@@ -22,7 +28,7 @@ export async function runCodingAgent(contract: WorkContract): Promise<CodingAgen
   return new Promise((resolvePromise) => {
     const child = spawn(
       "node",
-      [config.codingAgentCli, "run", "--contract", contractPath, "--repo", config.targetRepo],
+      [options.cliPath ?? config.codingAgentCli, "run", "--contract", contractPath, "--repo", options.repoRoot, "--base-branch", options.baseBranch],
       { env: process.env },
     );
 
