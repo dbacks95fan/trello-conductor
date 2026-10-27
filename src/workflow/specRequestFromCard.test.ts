@@ -70,7 +70,7 @@ function description(overrides: Record<string, string> = {}): string {
 function stubFetch(body: string, init: ResponseInit = { status: 200 }): typeof fetch {
   return (async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.includes("/product.yaml?")) return new Response("policy_profiles:\n  MF-DEFAULT: policy-profiles/default.md\n", init);
+    if (url.includes("/product.yaml?")) return new Response('schema_version: "1.0"\nproduct_id: MF\nproduct_name: MealFlow\ntrello_board_id: board-1\ntarget_repository: https://github.com/example/mealflow\nauthorized_product_owner_ids:\n  - owner-1\npolicy_profiles:\n  MF-DEFAULT: policy-profiles/default.md\n', init);
     if (url.includes("/policy-profiles/default.md?")) return new Response(PROFILE, init);
     return new Response(body, init);
   }) as typeof fetch;
@@ -81,6 +81,7 @@ const baseOptions = {
   githubToken: "",
   approvedBy: "Sobe",
   approvedAt: "2026-09-06T09:00:00.000Z",
+  targetRepositoryUrl: "https://github.com/example/mealflow",
 };
 
 test("parseCardIntentMetadata reads the Intent Creation Skill card projection", () => {

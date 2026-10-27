@@ -1,7 +1,35 @@
 // ABOUTME: Resolves a Spec & Design work request from a Trello card and the intent in intent-backlog.
 import type { TrelloCard } from "../trello/client.js";
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { parse as parseYaml } from "yaml";
+import { config } from "../config.js";
+import { createLifecycleValidator } from "../contracts/lifecycle.js";
+
+const lifecycleValidator = createLifecycleValidator(config.lifecycleSchemaPath);
+const execFileAsync = promisify(execFile);
+
+async function configuredRepositoryUrl(): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("git", ["config", "--get", "remote.origin.url"], { cwd: config.targetRepo, windowsHide: true });
+    const remote = stdout.trim();
+    const ssh = remote.match(/^git@github\.com:(.+)$/);
+    return (ssh ? `https://github.com/${ssh[1]}` : remote).replace(/\.git$/, "").replace(/\/$/, "").toLowerCase();
+  } catch {
+    throw new SpecRequestError("The configured target repository has no readable origin URL.");
+  }
+}
+
+export interface ProductConfig {
+  schema_version: "1.0";
+  product_id: string;
+  product_name: string;
+  trello_board_id: string;
+  target_repository: string;
+  authorized_product_owner_ids: string[];
+  policy_profiles: Record<string, string>;
+}
 
 /** Raised when a card in Spec & Design does not carry a usable intent
  *  reference. The workflow turns this into a card comment and leaves the card
@@ -46,6 +74,7 @@ export interface ResolvedSpecRequest {
   policyProfilePath: string;
   policyProfileContentSha256: string;
   frozenPolicyProfileBytes: Buffer;
+  productConfig: ProductConfig;
 }
 
 export interface ResolveSpecRequestOptions {
@@ -53,6 +82,8 @@ export interface ResolveSpecRequestOptions {
   githubToken: string;
   approvedBy: string;
   approvedAt: string;
+  /** Test seam for an isolated local fixture; production reads targetRepo's Git origin. */
+  targetRepositoryUrl?: string;
   fetchFn?: typeof fetch;
 }
 
@@ -245,8 +276,25 @@ export async function resolveSpecRequest(
   if (!productMatch) throw new SpecRequestError("Canonical intent path must be inside products/<product>/ so the selected policy profile can be resolved.");
   const productRoot = productMatch[1];
   const productConfigBytes = await fetchFrozenFile(location, `${productRoot}/product.yaml`, meta.intentCommit, options);
-  const productConfig = parseYaml(productConfigBytes.toString("utf8")) as Record<string, unknown>;
-  const profiles = productConfig.policy_profiles as Record<string, unknown> | undefined;
+  const parsedProductConfig = parseYaml(productConfigBytes.toString("utf8"));
+  const productConfigCheck = lifecycleValidator.validate("ProductConfig", parsedProductConfig);
+  if (!productConfigCheck.valid) {
+    throw new SpecRequestError(`product.yaml is not a valid ProductConfig: ${productConfigCheck.errors.join("; ")}`);
+  }
+  const productConfig = parsedProductConfig as ProductConfig;
+  if (productConfig.product_id !== meta.productId) {
+    throw new SpecRequestError(`product.yaml product_id "${productConfig.product_id}" does not match the card's Product ID "${meta.productId}".`);
+  }
+  const configuredTargetUrl = options.targetRepositoryUrl
+    ? options.targetRepositoryUrl.replace(/\.git$/, "").replace(/\/$/, "").toLowerCase()
+    : await configuredRepositoryUrl();
+  if (productConfig.target_repository.replace(/\.git$/, "").replace(/\/$/, "").toLowerCase() !== configuredTargetUrl) {
+    throw new SpecRequestError("product.yaml target_repository does not match the configured target repository's origin URL.");
+  }
+  if (card.idBoard && productConfig.trello_board_id !== card.idBoard) {
+    throw new SpecRequestError("product.yaml trello_board_id does not match the Trello card's board.");
+  }
+  const profiles = productConfig.policy_profiles;
   const profileRelativePath = profiles?.[meta.policyProfileId];
   if (typeof profileRelativePath !== "string" || !profileRelativePath || profileRelativePath.startsWith("/") || profileRelativePath.split("/").includes("..")) {
     throw new SpecRequestError(`product.yaml does not map policy profile ID "${meta.policyProfileId}" to a safe repository-relative path.`);
@@ -301,6 +349,7 @@ export async function resolveSpecRequest(
     policyProfilePath,
     policyProfileContentSha256: frozenArtifactSha256(frozenPolicyProfileBytes),
     frozenPolicyProfileBytes,
+    productConfig,
   };
 }
 

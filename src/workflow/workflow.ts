@@ -1,27 +1,42 @@
 // ABOUTME: Coordinates spec & design, coding, and remote evaluation transitions for Trello work items.
-import { CardParseError, contractFromCard } from "./contractFromCard.js";
 import { runCodingAgent } from "../codingAgent/runCodingAgent.js";
 import { CONTAINER_WORKSPACE, runSpecDesignAgent, type SpecDesignRequest } from "../specDesignAgent/runSpecDesignAgent.js";
 import { resolveSpecRequest, SpecRequestError } from "./specRequestFromCard.js";
 import { routeSpecResult } from "./specRouting.js";
-import { prepareSpecWorkspace, publishSpecBranch } from "./specWorkspace.js";
+import { prepareSpecWorkspace, publishSpecBranch, readCommittedWorkspaceFile } from "./specWorkspace.js";
 import { prepareGitEvaluationHandoff } from "../evaluatorAgent/gitHandoff.js";
 import { runRemoteEvaluator } from "../evaluatorAgent/remote.js";
 import { commentOnCard, getCard, getListIdByName, moveCard, updateCardDescription } from "../trello/client.js";
 import { config } from "../config.js";
 import { isUnderWipLimit } from "./wip.js";
 import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { stringify } from "yaml";
 import { activeFreezeForCard, readFreezeProjection, writeFreezeProjection, type FreezeTuple } from "./freezeState.js";
 import { frozenArtifactSha256 } from "./specRequestFromCard.js";
+import { createLifecycleValidator } from "../contracts/lifecycle.js";
+import { parse as parseYaml } from "yaml";
+import { validateWorkContractV3 } from "./workContractV3.js";
+import { adaptAcceptedWorkContract } from "./codingContractAdapter.js";
+import type { WorkContract } from "./contractFromCard.js";
+import { loadAcceptedExecutionContract } from "./acceptedExecutionContract.js";
+
+const lifecycleValidator = createLifecycleValidator(config.lifecycleSchemaPath);
 
 export interface MoveApproval {
   approvedBy: string;
   approvedAt: string;
+  eventId?: string;
 }
 
-const pendingQueue: string[] = [];
+interface AcceptedExecution {
+  cardId: string;
+  acceptance: Record<string, unknown>;
+  workspaceRef: string;
+  targetCommit: string;
+}
+const pendingQueue: AcceptedExecution[] = [];
 const pendingReviewQueue: string[] = [];
 const pendingSpecQueue: Array<{ cardId: string; approval: MoveApproval }> = [];
 let processing = false;
@@ -29,8 +44,8 @@ let reviewing = false;
 let specing = false;
 const handoffMarker = "<!-- agentic-sdlc-evaluator-handoff ";
 
-export function enqueueCard(cardId: string): void {
-  if (!pendingQueue.includes(cardId)) pendingQueue.push(cardId);
+export function enqueueCard(execution: AcceptedExecution): void {
+  if (!pendingQueue.some((entry) => entry.cardId === execution.cardId)) pendingQueue.push(execution);
   void drainQueue();
 }
 
@@ -74,7 +89,7 @@ async function drainQueue(): Promise<void> {
   processing = true;
   try {
     while (pendingQueue.length > 0) {
-      if (!(await isUnderWipLimit())) return;
+      if (!(await isUnderWipLimit(pendingQueue[0].cardId))) return;
       await processCard(pendingQueue.shift()!);
     }
   } finally {
@@ -82,15 +97,32 @@ async function drainQueue(): Promise<void> {
   }
 }
 
-async function processCard(cardId: string): Promise<void> {
+async function processCard(execution: AcceptedExecution): Promise<void> {
+  const { cardId } = execution;
   const card = await getCard(cardId);
   console.log(`[trello-conductor] Processing card ${card.idShort} "${card.name}"`);
 
-  let contract;
+  let contract: WorkContract;
+  let repositoryPath = "";
+  let baseBranch = "";
   try {
-    contract = contractFromCard(card, config.targetRepo);
+    const executionListId = await getListIdByName(config.listWorking);
+    if (card.idList !== executionListId) throw new Error("The card no longer resides in Execution.");
+    const loaded = await loadAcceptedExecutionContract({
+      card,
+      acceptance: execution.acceptance,
+      workspaceRef: execution.workspaceRef,
+      targetCommit: execution.targetCommit,
+      workspaceRoot: config.specWorkspaceRoot,
+      intentBacklogApiBase: config.intentBacklogApiBase,
+      githubToken: config.githubToken,
+      validator: lifecycleValidator,
+    });
+    contract = loaded.workContract;
+    repositoryPath = loaded.repositoryPath;
+    baseBranch = loaded.baseBranch;
   } catch (err) {
-    if (err instanceof CardParseError) {
+    if (err instanceof Error) {
       await commentOnCard(cardId, `⚠️ Trello Conductor could not build a Work Contract:\n\n${err.message}`);
       return;
     }
@@ -99,12 +131,11 @@ async function processCard(cardId: string): Promise<void> {
 
   const workingListId = await getListIdByName(config.listWorking);
   const reviewListId = await getListIdByName(config.listReview);
-  await moveCard(cardId, workingListId);
+  if (card.idList !== workingListId) return;
   await commentOnCard(cardId, `🤖 Coding Agent started (work item \`${contract.work_item}\`).`);
 
-  const coding = await runCodingAgent(contract);
+  const coding = await runCodingAgent(contract, { repoRoot: repositoryPath, baseBranch });
   if (!coding.evidence) {
-    await moveCard(cardId, reviewListId);
     await commentOnCard(cardId, `❌ Coding Agent produced no parseable output (exit code ${coding.exitCode}). Needs human investigation.`);
     return;
   }
@@ -114,7 +145,6 @@ async function processCard(cardId: string): Promise<void> {
   await commentOnCard(cardId, `🤖 Coding Agent finished: **${codingStatus}**\n\n${codingSummary}`);
 
   if (codingStatus !== "candidate_complete") {
-    await moveCard(cardId, reviewListId);
     await commentOnCard(cardId, "⏸️ Evaluator was not invoked because only `candidate_complete` implementations are eligible for independent evaluation.");
     return;
   }
@@ -123,12 +153,10 @@ async function processCard(cardId: string): Promise<void> {
   const runId = String(coding.evidence.runId ?? "");
   const worktree = coding.evidence.worktree as { path?: string; branch?: string } | undefined;
   if (!runId) {
-    await moveCard(cardId, reviewListId);
     await commentOnCard(cardId, "❌ Coding Agent did not provide a run ID. Independent evaluation cannot be started.");
     return;
   }
   if (!worktree?.path || !worktree.branch) {
-    await moveCard(cardId, reviewListId);
     await commentOnCard(cardId, "❌ Coding Agent did not provide a candidate worktree path and branch. Independent evaluation cannot be started.");
     return;
   }
@@ -138,7 +166,7 @@ async function processCard(cardId: string): Promise<void> {
     branch: String(worktree.branch ?? ""),
     intentPath: contract.intent.path,
     contractText: stringify(contract),
-    evidencePath: join(config.targetRepo, ".agent", "evidence", `${workItem}-${runId}.json`),
+    evidencePath: join(repositoryPath, ".agent", "evidence", `${workItem}-${runId}.json`),
   });
   const handoffComment = JSON.stringify(handoff);
   await commentOnCard(cardId, `${handoffMarker}${handoffComment} -->\n🔎 Independent evaluation is ready from Git revision \`${handoff.revision}\`. Moving this card to ${config.listReview} starts the Evaluator Agent.`);
@@ -333,6 +361,48 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
     },
   };
 
+  const stageInvocation = {
+    schema_version: "1.0",
+    invocation_id: request.runId,
+    trigger_event_id: approval.eventId ?? request.runId,
+    stage: "spec_design",
+    work_item: { product_id: resolved.productId, intent_id: resolved.intentId, intent_version: resolved.intentVersion, trello_card_id: cardId },
+    input_artifacts: [
+      { repository: `https://github.com/${resolved.intentRepository}`, commit_sha: resolved.intentCommit, path: resolved.intentPath, sha256: resolved.intentContentSha256 },
+      { repository: `https://github.com/${resolved.intentRepository}`, commit_sha: resolved.intentCommit, path: resolved.policyProfilePath, sha256: resolved.policyProfileContentSha256 },
+    ],
+    target: { repository: workspace.remoteUrl.replace(/\.git$/, ""), commit_sha: workspace.baseCommit },
+    workspace_ref: workspace.branch,
+    read_paths: ["."],
+    write_paths: [`.agent/work/${resolved.intentId}/spec.md`, `.agent/work/${resolved.intentId}/work-contract.yaml`],
+  };
+  const invocationValidation = lifecycleValidator.validate("StageInvocation", stageInvocation);
+  if (!invocationValidation.valid) {
+    await commentOnCard(cardId, `? Spec & Design invocation was not started because its StageInvocation record is invalid: ${invocationValidation.errors.join("; ")}`);
+    return;
+  }
+  await commentOnCard(cardId, `<!-- agentic-sdlc-stage-invocation ${JSON.stringify(stageInvocation)} -->\nValidated Spec & Design StageInvocation recorded.`);
+
+  const recordStageResult = async (status: "spec_ready" | "needs_decision" | "blocked" | "failed", outputArtifacts: unknown[], summary: string, findings?: string[]) => {
+    const stageResult = {
+      schema_version: "1.0",
+      invocation_id: request.runId,
+      stage: "spec_design",
+      work_item: stageInvocation.work_item,
+      status,
+      output_artifacts: outputArtifacts,
+      summary,
+      ...(findings?.length ? { findings } : {}),
+    };
+    const resultValidation = lifecycleValidator.validate("StageResult", stageResult);
+    if (!resultValidation.valid) {
+      await commentOnCard(cardId, `? Spec & Design StageResult was rejected because it is invalid: ${resultValidation.errors.join("; ")}`);
+      return false;
+    }
+    await commentOnCard(cardId, `<!-- agentic-sdlc-stage-result ${JSON.stringify(stageResult)} -->\nValidated Spec & Design StageResult recorded.`);
+    return true;
+  };
+
   await commentOnCard(
     cardId,
     `🧭 Spec & Design Agent container started for \`${request.workItem}\` (run \`${request.runId}\`) on branch \`${workspace.branch}\`.`,
@@ -340,6 +410,63 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
 
   const run = await runSpecDesignAgent(request, { hostWorkspace: workspace.path });
   const route = routeSpecResult(run);
+  const rawStatus = String(run.result?.status ?? "failed");
+  const safeStatus = (["spec_ready", "needs_decision", "blocked", "failed"].includes(rawStatus) ? rawStatus : "failed") as "spec_ready" | "needs_decision" | "blocked" | "failed";
+  if (run.result?.status === "spec_ready") {
+    const contractPath = typeof run.result.workContractPath === "string" ? run.result.workContractPath : "";
+    const specCommit = typeof run.result.specCommit === "string" ? run.result.specCommit : "";
+    if (!contractPath || !specCommit) {
+      await recordStageResult("blocked", [], "Spec & Design omitted the committed Work Contract v3 reference.", ["Missing workContractPath or specCommit"]);
+      await commentOnCard(cardId, "? Spec & Design output is not eligible for Design Review: it must include a committed Work Contract v3 path and commit reference. The current Spec & Design Agent result does not provide that contract yet.");
+      return;
+    }
+    try {
+      const contractText = await readCommittedWorkspaceFile(workspace.path, specCommit, contractPath);
+      const contract = parseYaml(contractText);
+      const issues = validateWorkContractV3(contract, {
+        productId: resolved.productId,
+        intentId: resolved.intentId,
+        intentVersion: resolved.intentVersion,
+        cardId: card.id,
+        intentRepository: `https://github.com/${resolved.intentRepository}`,
+        intentCommit: resolved.intentCommit,
+        intentPath: resolved.intentPath,
+        intentSha256: frozenArtifactSha256(resolved.frozenIntentBytes),
+        policyProfileId: resolved.policyProfileId,
+        policyProfileVersion: resolved.policyProfileVersion,
+        policyProfilePath: resolved.policyProfilePath,
+        policyProfileSha256: resolved.policyProfileContentSha256,
+        targetRepository: workspace.remoteUrl.replace(/\.git$/, ""),
+        targetCommit: workspace.baseCommit,
+      }, lifecycleValidator);
+      if (issues.length > 0) {
+        await recordStageResult("blocked", [], "The proposed Work Contract v3 failed canonical schema or frozen-reference checks.", issues);
+        await commentOnCard(cardId, "? Spec & Design output is not eligible for Design Review:\n\n" + issues.map((issue) => `- ${issue}`).join("\n"));
+        return;
+      }
+      const specPath = typeof run.result.specPath === "string" ? run.result.specPath : "";
+      if (!specPath) {
+        await recordStageResult("blocked", [], "Spec & Design omitted the committed spec.md path.", ["Missing specPath"]);
+        await commentOnCard(cardId, "? Spec & Design output is not eligible for Design Review: the committed spec.md path is missing.");
+        return;
+      }
+      const specText = await readCommittedWorkspaceFile(workspace.path, specCommit, specPath);
+      const repository = workspace.remoteUrl.replace(/\.git$/, "");
+      const outputArtifacts = [
+        { repository, commit_sha: specCommit, path: specPath, sha256: createHash("sha256").update(specText, "utf8").digest("hex") },
+        { repository, commit_sha: specCommit, path: contractPath, sha256: createHash("sha256").update(contractText, "utf8").digest("hex") },
+      ];
+      if (!(await recordStageResult("spec_ready", outputArtifacts, String(run.result.summary ?? "Spec and Work Contract v3 are ready for human review.")))) return;
+    } catch (err) {
+      await recordStageResult("blocked", [], "The committed Work Contract v3 could not be read, parsed, or validated.", [err instanceof Error ? err.message : String(err)]);
+      await commentOnCard(cardId, `? The committed Work Contract v3 could not be read or parsed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+  } else {
+    const summary = String(run.result?.summary ?? "The Spec & Design Agent did not return a parseable successful result.");
+    const findings = Array.isArray(run.result?.blockingConcerns) ? run.result.blockingConcerns.map(String) : [];
+    if (!(await recordStageResult(safeStatus, [], summary, findings))) return;
+  }
   await commentOnCard(cardId, route.comment);
 
   if (route.comment.includes("spec ready for human review")) {
@@ -378,11 +505,27 @@ export async function handleCardPrioritized(cardId: string, approval: MoveApprov
       policyProfileCommit: resolved.intentCommit,
       policyProfileSha256: resolved.policyProfileContentSha256,
       cardId,
+      freezeEventId: approval.eventId,
       authorizedBy: approval.approvedBy,
       frozenAt: approval.approvedAt,
     };
+    const freezeRecord = {
+      schema_version: "1.0",
+      event_id: approval.eventId ?? randomUUID(),
+      event_type: "activated",
+      work_item: { product_id: resolved.productId, intent_id: resolved.intentId, intent_version: resolved.intentVersion, trello_card_id: cardId },
+      intent: { repository: `https://github.com/${resolved.intentRepository}`, commit_sha: resolved.intentCommit, path: resolved.intentPath, sha256: frozenArtifactSha256(resolved.frozenIntentBytes) },
+      policy_profile_id: resolved.policyProfileId,
+      policy_profile_version: resolved.policyProfileVersion,
+      policy_profile: { repository: `https://github.com/${resolved.intentRepository}`, commit_sha: resolved.intentCommit, path: resolved.policyProfilePath, sha256: resolved.policyProfileContentSha256 },
+      authorized_by: approval.approvedBy,
+      recorded_at: approval.approvedAt,
+    };
+    const recordValidation = lifecycleValidator.validate("FreezeActivationEvent", freezeRecord);
+    if (!recordValidation.valid) throw new Error(`FreezeActivationEvent is invalid: ${recordValidation.errors.join("; ")}`);
     const projection = { state: "Active" as const, tuple };
     await updateCardDescription(cardId, writeFreezeProjection(card.desc ?? "", projection));
+    await commentOnCard(cardId, `<!-- agentic-sdlc-freeze-event ${JSON.stringify(freezeRecord)} -->\nValidated Prioritized freeze activation record.`);
     await commentOnCard(cardId, `🔒 Prioritized freeze activated.\n\n${JSON.stringify(projection, null, 2)}`);
   } catch (err) {
     const backlogId = await getListIdByName(config.listBacklog);
@@ -391,17 +534,37 @@ export async function handleCardPrioritized(cardId: string, approval: MoveApprov
   }
 }
 
-export async function handleCardFreezeRevocation(cardId: string, revokedBy: string, revokedAt: string): Promise<void> {
+export async function handleCardFreezeRevocation(cardId: string, revokedBy: string, revokedAt: string, eventId?: string): Promise<void> {
   const card = await getCard(cardId);
   const projection = readFreezeProjection(card.desc ?? "");
   if (!projection || projection.state !== "Active") return;
+  if (!projection.tuple.freezeEventId) {
+    await commentOnCard(cardId, "Freeze revocation was not recorded because the active freeze projection has no activation event ID.");
+    return;
+  }
+  const freezeRecord = {
+    schema_version: "1.0",
+    event_id: eventId ?? randomUUID(),
+    event_type: "revoked",
+    work_item: { product_id: projection.tuple.productId, intent_id: projection.tuple.intentId, intent_version: projection.tuple.intentVersion, trello_card_id: cardId },
+    revokes_event_id: projection.tuple.freezeEventId,
+    authorized_by: revokedBy,
+    recorded_at: revokedAt,
+    reason: "The product owner returned the card to an editable pre-execution stage.",
+  };
+  const recordValidation = lifecycleValidator.validate("FreezeRevocationEvent", freezeRecord);
+  if (!recordValidation.valid) {
+    await commentOnCard(cardId, `Freeze revocation was not recorded because the event is invalid: ${recordValidation.errors.join("; ")}`);
+    return;
+  }
   const revoked = { ...projection, state: "Revoked" as const, revokedBy, revokedAt };
   await updateCardDescription(cardId, writeFreezeProjection(card.desc ?? "", revoked));
+  await commentOnCard(cardId, `<!-- agentic-sdlc-freeze-event ${JSON.stringify(freezeRecord)} -->\nValidated Prioritized freeze revocation record.`);
   await commentOnCard(cardId, `🔓 Prioritized freeze revoked because the card returned to ${card.idList === await getListIdByName(config.listNewIdeas) ? "New Ideas" : "Backlog"}.\n\n${JSON.stringify(revoked, null, 2)}`);
 }
 
-export function handleCardReadyForAgent(cardId: string): void {
-  enqueueCard(cardId);
+export function handleCardReadyForAgent(cardId: string, acceptance: Record<string, unknown>, workspaceRef: string, targetCommit: string): void {
+  enqueueCard({ cardId, acceptance, workspaceRef, targetCommit });
 }
 
 export function handleCardReviewForAgent(cardId: string): void {

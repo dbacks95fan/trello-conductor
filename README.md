@@ -14,16 +14,18 @@ metadata.
 
 | Authorized transition | Conductor action |
 | --- | --- |
-| Backlog → Prioritized | Validate the pinned intent and policy profile; record an Active freeze projection and visible event. |
-| Prioritized → Spec & Design | Require the matching active freeze; stage exact intent/profile bytes and invoke Spec & Design. A ready spec is published for human review while the card stays in Spec & Design. |
-| Human-approved Spec & Design → Execution | The Coding Agent trigger is intended to require the accepted spec and work contract. The current adapter still reads the legacy card contract and must be reconciled before production deployment. |
-| Execution → Evaluation | Publish immutable candidate/evidence handoff and invoke the independent Evaluator. |
-| Evaluation → Human Approval | On evaluation pass, record the result and await the accountable human. |
+| Backlog → Prioritized | Validate the pinned intent/profile and product-owner ID; record schema-valid freeze activation data and the current projection. |
+| Prioritized → Spec & Design | Verify the active freeze, record a StageInvocation, and invoke Spec & Design. Only a schema-valid Work Contract v3 bound to frozen inputs can be reported ready for human review. |
+| Spec & Design → Execution | Require a product-owner `SpecAcceptanceRecord`; retrieve the referenced spec and Work Contract from GitHub, verify hashes, and validate Work Contract v3 against the active freeze. |
+| Execution → Evaluation | Run the existing Coding Agent and Evaluator adapters. Their current contract boundary is legacy and is not yet compliant with canonical Work Contract v3. |
+| Evaluation → Human Approval | The existing Evaluator pass can move the card to Human Approval. The accountable human still decides whether to proceed. |
 
-Returning a card to Backlog or New Ideas revokes its active freeze while
-preserving the event history. Human Approval, Release, Production Observation,
-and Done remain accountable human stages; the Conductor never records a human
-approval or moves work to Done automatically.
+Returning a card from Prioritized or Spec & Design to Backlog or New Ideas
+revokes its active freeze while preserving the event history. The webhook
+boundary uses Trello IDs rather than list names, checks current card state,
+blocks out-of-order moves, validates owner identity, and deduplicates event IDs.
+Later human records are not enforced yet; see
+[`docs/HUMAN_RECORDS.md`](docs/HUMAN_RECORDS.md).
 
 Trello Conductor — not Claude — owns all Trello reads and writes. It calls the
 Trello REST API directly with a key/token/secret; the Coding Agent it invokes
@@ -134,16 +136,22 @@ engineering-stage handler for that work item:
    publishes a branch. A failed push is reported on the card; the spec is still
    committed locally on the work branch.
 
-The Prioritized transition records the authorizing member and timestamp.
-Spec & Design re-resolves both artifacts and checks their exact fingerprints
-against that freeze before invocation. A generated spec is not an approval;
-human review remains within Spec & Design.
+The Prioritized transition records a schema-valid activation event and the
+authorizing Trello member ID. Spec & Design re-resolves both artifacts and
+checks their exact fingerprints against that freeze before invocation. It also
+records a schema-valid StageInvocation and StageResult. A generated spec is
+not an approval; human review remains within Spec & Design.
 
-**Known end-to-end gap:** the Coding Agent adapter still derives a legacy Work
-Contract from card sections and a local intent instead of validating the
-accepted `spec.md` and `work-contract.yaml` produced by Spec & Design. Do not
-deploy this change as a complete SDLC until that input boundary is reconciled
-with the Coding Agent's existing contract.
+**Current integration boundary:** the real Spec & Design Agent does not yet
+return a committed Work Contract v3 reference. This Conductor therefore blocks
+`spec_ready` and does not publish that result for Design Review until the
+contract exists and passes canonical validation. Local contract-valid test
+doubles exercise the intended Conductor boundary; they do not prove the
+separate agent integration. After a valid acceptance, the Conductor adapts v3
+to the Coding Agent's v2 input on the accepted work branch. It blocks any
+validation gate or command that the Coding Agent cannot run exactly. Later
+Human Approval, Release, Production Observation, and Done records remain
+manual and are not enforced by this build.
 
 ## What it does, step by step
 
@@ -152,22 +160,20 @@ with the Coding Agent's existing contract.
 2. `src/trello/webhookVerify.ts` checks the `X-Trello-Webhook` HMAC signature
    against the raw request body — deliveries that don't verify are rejected
    with 401 and never reach the workflow logic.
-3. If the event says a card moved into `TRELLO_LIST_WORKING`, the card is queued
-   (`src/workflow/workflow.ts`).
-4. The queue drains one card at a time, gated by `WIP_LIMIT` cards currently in
-   `TRELLO_LIST_WORKING` (`src/workflow/wip.ts`) — if full, the card waits in
-   memory and is picked up as soon as a slot frees.
-5. `src/workflow/contractFromCard.ts` deterministically parses the card's
-   description (the USER STORY / ACCEPTANCE CRITERIA / PLAYWRIGHT (TEST CASES) /
-   DONE (DEFINITION OF DONE) convention used on this board, with some heading
-   aliases tolerated) into a Work Contract. This is pattern-matching, not
-   judgment — if the expected structure isn't there, it throws rather than
-   inventing acceptance criteria, and the card is left in place with a comment
-   explaining what's missing.
-6. The card moves to `TRELLO_LIST_WORKING`, and
-   `src/codingAgent/runCodingAgent.ts` spawns
-   `coding-agent run --contract <generated.yaml> --repo <TARGET_REPO>` exactly
-   as documented in that tool's own README — no special integration.
+3. `src/trello/webhookEvent.ts` converts only list moves into canonical events
+   using Trello board, card, list, actor, and event IDs. The Conductor verifies
+   current card state, allowed order, owner identity, and event deduplication.
+4. The Prioritized transition records the freeze. Entering Spec & Design records
+   a schema-valid StageInvocation and invokes the Spec & Design Agent. Its
+   schema-valid StageResult must include committed `spec.md` and Work Contract v3
+   references, or the Conductor blocks the handoff.
+5. Moving to Execution requires a product-owner SpecAcceptanceRecord. The
+   Conductor checks its schema, authorization, work identity, immutable artifact
+   hashes, StageResult references, Work Contract v3 fields, and target revision.
+6. The Conductor creates the Coding Agent's v2 contract from the accepted v3
+   contract and spec. It accepts only validation names and commands that map
+   exactly to the Coding Agent's fixed deterministic gates, then runs it on a
+   worktree based on the accepted Spec & Design branch.
 7. For a `candidate_complete` result, Trello Conductor records the Work Contract
    and Evidence Package in the candidate branch, pushes the branch, and writes
    the repository URL, commit SHA, and repository-relative artifact paths to
@@ -176,11 +182,10 @@ with the Coding Agent's existing contract.
    authenticated `EVALUATOR_API_URL` endpoint. The evaluator validates the
    allowed repository URL, checks out the supplied SHA into request-scoped
    temporary storage, and returns its JSON result.
-9. Whatever the result (`candidate_complete`, `blocked`, `needs_decision`,
-   `failed`, or no parseable output at all), the card moves to
-   `TRELLO_LIST_REVIEW` with a comment summarizing the outcome and validation
-   gate results. **Trello Conductor never moves a card to Done** — that's a
-   human decision, always.
+9. A non-candidate Coding Agent result leaves the card in Execution. Only a
+   candidate is sent to Evaluation. A passing Evaluation can move the card to
+   Human Approval; later human records and Release/Observation/Done transitions
+   are not yet enforced. The Conductor never moves a card to Done.
 
 ## Setup
 
