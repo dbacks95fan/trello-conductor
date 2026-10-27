@@ -40,8 +40,16 @@ function request(workspaceSha: string): SpecDesignRequest {
       frozenArtifactSha256: workspaceSha,
       contentSha256: "c".repeat(64),
     },
+    policyProfile: {
+      repository: "dbacks95fan/intent-backlog",
+      commit: "a".repeat(40),
+      path: "products/mealflow/policy-profiles/default.md",
+      profileId: "MF-DEFAULT",
+      version: "1",
+      frozenArtifactSha256: "e".repeat(64),
+    },
     target: { repository: "C:/Repos/menuapp", baseCommit: "d".repeat(40), branch: "work/INT-MF-0042", workspace: "/work" },
-    approval: { readyForPlanning: true, approvedBy: "Sobe", approvedAt: "2026-09-06T09:00:00.000Z" },
+    approval: { prioritized: true, approvedBy: "Sobe", approvedAt: "2026-09-06T09:00:00.000Z" },
   };
 }
 

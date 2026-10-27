@@ -2,7 +2,7 @@ import express from "express";
 import { config, webhookUrl } from "./config.js";
 import { ensureWebhook, getListIdByName, resolveBoardId } from "./trello/client.js";
 import { verifyTrelloSignature } from "./trello/webhookVerify.js";
-import { handleCardReadyForAgent, handleCardReviewForAgent, handleCardSpecAndDesign } from "./workflow/workflow.js";
+import { handleCardFreezeRevocation, handleCardPrioritized, handleCardReadyForAgent, handleCardReviewForAgent, handleCardSpecAndDesign } from "./workflow/workflow.js";
 
 const app = express();
 
@@ -50,23 +50,33 @@ app.post("/webhooks/trello", async (req, res) => {
   };
   if (!action || action.type !== "updateCard") return;
 
-  const data = action.data as { listAfter?: { name?: string }; card?: { id?: string } };
-  const movedIntoReady = data.listAfter?.name === config.listReady;
-  const movedIntoReview = data.listAfter?.name === config.listReview;
-  const movedIntoSpecDesign = data.listAfter?.name === config.listSpecDesign;
+  const data = action.data as { listBefore?: { name?: string }; listAfter?: { name?: string }; card?: { id?: string } };
+  const movedIntoPrioritized = data.listAfter?.name === config.listPrioritized && data.listBefore?.name === config.listBacklog;
+  const returnedToEditable = data.listBefore?.name !== data.listAfter?.name && [config.listBacklog, config.listNewIdeas].includes(data.listAfter?.name ?? "");
+  const enteredAList = data.listBefore?.name !== data.listAfter?.name;
+  const movedIntoExecution = enteredAList && data.listAfter?.name === config.listWorking;
+  const movedIntoReview = enteredAList && data.listAfter?.name === config.listReview;
+  const movedIntoSpecDesign = enteredAList && data.listAfter?.name === config.listSpecDesign;
   const cardId = data.card?.id;
 
-  if (movedIntoReady && cardId) {
-    console.log(`[trello-conductor] Card ${cardId} moved into "${config.listReady}".`);
+  if (returnedToEditable && cardId) {
+    const member = action.memberCreator;
+    void handleCardFreezeRevocation(cardId, member?.fullName || member?.username || member?.id || "unknown", action.date ?? new Date().toISOString());
+  } else if (movedIntoPrioritized && cardId) {
+    const member = action.memberCreator;
+    void handleCardPrioritized(cardId, {
+      approvedBy: member?.fullName || member?.username || member?.id || "unknown",
+      approvedAt: typeof action.date === "string" ? action.date : new Date().toISOString(),
+    });
+  } else if (movedIntoExecution && cardId) {
+    console.log(`[trello-conductor] Card ${cardId} moved into "${config.listWorking}".`);
     handleCardReadyForAgent(cardId);
   } else if (movedIntoReview && cardId) {
     console.log(`[trello-conductor] Card ${cardId} moved into "${config.listReview}".`);
     handleCardReviewForAgent(cardId);
   } else if (movedIntoSpecDesign && cardId) {
     console.log(`[trello-conductor] Card ${cardId} moved into "${config.listSpecDesign}".`);
-    // The person who moved the card into Spec & Design is recorded as the
-    // Ready-for-Planning approver of record; the exact freeze time is preferred
-    // from the intent's own frozen_at when the resolver finds it.
+    // The Prioritized transition already recorded the authorization and freeze.
     const member = action.memberCreator;
     handleCardSpecAndDesign(cardId, {
       approvedBy: member?.fullName || member?.username || member?.id || "trello-conductor",
@@ -78,12 +88,12 @@ app.post("/webhooks/trello", async (req, res) => {
 async function main() {
   // Fail fast and loud if the configured lists don't exist — better than
   // silently never matching anything.
-  await getListIdByName(config.listReady);
+  await getListIdByName(config.listBacklog);
+  await getListIdByName(config.listPrioritized);
   await getListIdByName(config.listWorking);
   await getListIdByName(config.listReview);
-  // listSpecDesign / listDesignReview are resolved lazily on first use so a
-  // board that has not added those lists yet does not block startup of the
-  // existing coding and evaluation flow.
+  await getListIdByName(config.listSpecDesign);
+  await getListIdByName(config.listHumanApproval);
 
   // Must be listening BEFORE asking Trello to register the webhook — Trello
   // does an immediate reachability check (a HEAD request) against the callback

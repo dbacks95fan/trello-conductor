@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { prepareSpecWorkspace, publishSpecBranch } from "./specWorkspace.js";
 
 const REMOTE_URL = "https://github.com/example/target.git";
+const FROZEN_PROFILE = Buffer.from("Profile ID: MF-DEFAULT\nVersion: 1\n");
 
 function initRepo(originUrl: string | null = REMOTE_URL): string {
   const dir = mkdtempSync(join(tmpdir(), "spec-workspace-target-"));
@@ -35,7 +36,7 @@ test("prepareSpecWorkspace clones work/<id>, freezes intent.md, and is idempoten
   const intentId = "INT-MF-0042";
 
   try {
-    const first = await prepareSpecWorkspace({ targetRepo, workspaceRoot, intentId, frozenIntentBytes });
+    const first = await prepareSpecWorkspace({ targetRepo, workspaceRoot, intentId, frozenIntentBytes, frozenPolicyProfileBytes: FROZEN_PROFILE });
 
     assert.equal(first.created, true);
     assert.equal(first.branch, "work/INT-MF-0042");
@@ -48,6 +49,7 @@ test("prepareSpecWorkspace clones work/<id>, freezes intent.md, and is idempoten
     const intentFile = join(first.path, ".agent", "work", intentId, "intent.md");
     assert.ok(existsSync(intentFile));
     assert.deepEqual(readFileSync(intentFile), frozenIntentBytes);
+    assert.deepEqual(readFileSync(join(first.path, ".agent", "work", intentId, "policy-profile.md")), FROZEN_PROFILE);
 
     const git = (...args: string[]) => execFileSync("git", args, { cwd: first.path }).toString().trim();
     assert.equal(git("rev-parse", "--abbrev-ref", "HEAD"), "work/INT-MF-0042");
@@ -63,7 +65,7 @@ test("prepareSpecWorkspace clones work/<id>, freezes intent.md, and is idempoten
     assert.equal(log.length, 2);
     assert.match(log[0], /freeze intent for INT-MF-0042/);
 
-    const second = await prepareSpecWorkspace({ targetRepo, workspaceRoot, intentId, frozenIntentBytes });
+    const second = await prepareSpecWorkspace({ targetRepo, workspaceRoot, intentId, frozenIntentBytes, frozenPolicyProfileBytes: FROZEN_PROFILE });
     assert.equal(second.created, false);
     assert.equal(second.path, first.path);
     assert.equal(
@@ -91,6 +93,7 @@ test("prepareSpecWorkspace fails loudly when the repo ignores .agent/work/", asy
         workspaceRoot,
         intentId: "INT-MF-0042",
         frozenIntentBytes: Buffer.from("---\nintent_id: INT-MF-0042\n---\n"),
+        frozenPolicyProfileBytes: FROZEN_PROFILE,
       }),
     );
   } finally {
@@ -109,6 +112,7 @@ test("prepareSpecWorkspace refuses a target repo without an HTTPS remote", async
         workspaceRoot,
         intentId: "INT-MF-0042",
         frozenIntentBytes: Buffer.from("x"),
+        frozenPolicyProfileBytes: FROZEN_PROFILE,
       }),
       /must be an HTTPS GitHub URL/,
     );

@@ -7,12 +7,14 @@ import { routeSpecResult } from "./specRouting.js";
 import { prepareSpecWorkspace, publishSpecBranch } from "./specWorkspace.js";
 import { prepareGitEvaluationHandoff } from "../evaluatorAgent/gitHandoff.js";
 import { runRemoteEvaluator } from "../evaluatorAgent/remote.js";
-import { commentOnCard, getCard, getListIdByName, moveCard } from "../trello/client.js";
+import { commentOnCard, getCard, getListIdByName, moveCard, updateCardDescription } from "../trello/client.js";
 import { config } from "../config.js";
 import { isUnderWipLimit } from "./wip.js";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { stringify } from "yaml";
+import { activeFreezeForCard, readFreezeProjection, writeFreezeProjection, type FreezeTuple } from "./freezeState.js";
+import { frozenArtifactSha256 } from "./specRequestFromCard.js";
 
 export interface MoveApproval {
   approvedBy: string;
@@ -218,8 +220,7 @@ async function evaluateCard(cardId: string): Promise<void> {
   } else if (status === "fail") {
     await commentOnCard(cardId, `↩️ Independent evaluation failed. Findings require implementation rework. Card remains in ${config.listReview}; automatic retry is intentionally not enabled in v0.1.`);
   } else if (status === "needs_decision") {
-    const humanDecisionListId = await getListIdByName(config.listHumanDecision);
-    await moveCard(cardId, humanDecisionListId);
+    // Keep the request in Evaluation; the card move itself remains human-authorized.
     await commentOnCard(cardId, "❓ Evaluator requires human judgment. The decision brief above contains the evidence, options, and consequence of waiting.");
   } else {
     await commentOnCard(cardId, `⚠️ Unknown evaluator status \`${status}\`. Card remains in ${config.listReview}.`);
@@ -241,14 +242,19 @@ async function processSpecCard(cardId: string, approval: MoveApproval): Promise<
 async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise<void> {
   const card = await getCard(cardId);
   console.log(`[trello-conductor] Spec & Design for card ${card.idShort} "${card.name}"`);
+  const activeFreeze = activeFreezeForCard(card);
+  if (!activeFreeze) {
+    await commentOnCard(cardId, "⛔ Spec & Design was not started: this card has no active Prioritized freeze. Return it to Backlog, reconcile the intent, then move it to Prioritized.");
+    return;
+  }
 
   let resolved;
   try {
     resolved = await resolveSpecRequest(card, {
       githubApiBase: config.intentBacklogApiBase,
       githubToken: config.githubToken,
-      approvedBy: approval.approvedBy,
-      approvedAt: approval.approvedAt,
+      approvedBy: activeFreeze.tuple.authorizedBy,
+      approvedAt: activeFreeze.tuple.frozenAt,
     });
   } catch (err) {
     if (err instanceof SpecRequestError) {
@@ -256,6 +262,20 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
       return;
     }
     throw err;
+  }
+
+  if (
+    frozenArtifactSha256(resolved.frozenIntentBytes) !== activeFreeze.tuple.intentSha256 ||
+    resolved.productId !== activeFreeze.tuple.productId ||
+    resolved.intentId !== activeFreeze.tuple.intentId ||
+    resolved.intentVersion !== activeFreeze.tuple.intentVersion ||
+    resolved.intentCommit !== activeFreeze.tuple.intentCommit ||
+    resolved.policyProfileId !== activeFreeze.tuple.policyProfileId ||
+    resolved.policyProfileVersion !== activeFreeze.tuple.policyProfileVersion ||
+    resolved.policyProfileContentSha256 !== activeFreeze.tuple.policyProfileSha256
+  ) {
+    await commentOnCard(cardId, "⛔ Spec & Design was not started: the current intent or policy profile does not match the active Prioritized freeze.");
+    return;
   }
 
   for (const warning of resolved.warnings) {
@@ -269,6 +289,7 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
       workspaceRoot: config.specWorkspaceRoot,
       intentId: resolved.intentId,
       frozenIntentBytes: resolved.frozenIntentBytes,
+      frozenPolicyProfileBytes: resolved.frozenPolicyProfileBytes,
     });
   } catch (err) {
     await commentOnCard(
@@ -289,6 +310,14 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
       frozenArtifactSha256: workspace.frozenArtifactSha256,
       contentSha256: resolved.intentContentSha256,
     },
+    policyProfile: {
+      repository: resolved.intentRepository,
+      commit: resolved.intentCommit,
+      path: resolved.policyProfilePath,
+      profileId: resolved.policyProfileId,
+      version: resolved.policyProfileVersion,
+      frozenArtifactSha256: resolved.policyProfileContentSha256,
+    },
     target: {
       repository: config.targetRepo,
       baseCommit: workspace.baseCommit,
@@ -298,7 +327,7 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
       workspace: CONTAINER_WORKSPACE,
     },
     approval: {
-      readyForPlanning: true,
+      prioritized: true,
       approvedBy: resolved.approvedBy,
       approvedAt: resolved.approvedAt,
     },
@@ -313,10 +342,7 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
   const route = routeSpecResult(run);
   await commentOnCard(cardId, route.comment);
 
-  if (route.destination === "design-review") {
-    // Design Review is a human step, so the spec has to exist somewhere a
-    // reviewer can open. The Conductor publishes the branch — the agent has no
-    // write authority over the product repository (AGENT_ROLES.md).
+  if (route.comment.includes("spec ready for human review")) {
     const published = await publishSpecBranch(workspace, config.githubToken);
     await commentOnCard(
       cardId,
@@ -324,10 +350,54 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
         ? `📤 Work branch published for Design Review: ${published.branchUrl}`
         : `⚠️ The spec is committed locally on \`${workspace.branch}\` but could not be pushed for review: ${published.reason}`,
     );
-    await moveCard(cardId, await getListIdByName(config.listDesignReview));
-  } else if (route.destination === "human-decision") {
-    await moveCard(cardId, await getListIdByName(config.listHumanDecision));
   }
+}
+
+export async function handleCardPrioritized(cardId: string, approval: MoveApproval): Promise<void> {
+  const card = await getCard(cardId);
+  const prior = readFreezeProjection(card.desc ?? "");
+  if (prior?.state === "Active") {
+    await commentOnCard(cardId, "ℹ️ This card already has an active Prioritized freeze; duplicate board events did not create another freeze.");
+    return;
+  }
+  try {
+    const resolved = await resolveSpecRequest(card, {
+      githubApiBase: config.intentBacklogApiBase,
+      githubToken: config.githubToken,
+      approvedBy: approval.approvedBy,
+      approvedAt: approval.approvedAt,
+    });
+    const tuple: FreezeTuple = {
+      productId: resolved.productId,
+      intentId: resolved.intentId,
+      intentVersion: resolved.intentVersion,
+      intentCommit: resolved.intentCommit,
+      intentSha256: frozenArtifactSha256(resolved.frozenIntentBytes),
+      policyProfileId: resolved.policyProfileId,
+      policyProfileVersion: resolved.policyProfileVersion,
+      policyProfileCommit: resolved.intentCommit,
+      policyProfileSha256: resolved.policyProfileContentSha256,
+      cardId,
+      authorizedBy: approval.approvedBy,
+      frozenAt: approval.approvedAt,
+    };
+    const projection = { state: "Active" as const, tuple };
+    await updateCardDescription(cardId, writeFreezeProjection(card.desc ?? "", projection));
+    await commentOnCard(cardId, `🔒 Prioritized freeze activated.\n\n${JSON.stringify(projection, null, 2)}`);
+  } catch (err) {
+    const backlogId = await getListIdByName(config.listBacklog);
+    await moveCard(cardId, backlogId);
+    await commentOnCard(cardId, `⛔ Prioritized freeze was not activated; the card was returned to Backlog.\n\n${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+export async function handleCardFreezeRevocation(cardId: string, revokedBy: string, revokedAt: string): Promise<void> {
+  const card = await getCard(cardId);
+  const projection = readFreezeProjection(card.desc ?? "");
+  if (!projection || projection.state !== "Active") return;
+  const revoked = { ...projection, state: "Revoked" as const, revokedBy, revokedAt };
+  await updateCardDescription(cardId, writeFreezeProjection(card.desc ?? "", revoked));
+  await commentOnCard(cardId, `🔓 Prioritized freeze revoked because the card returned to ${card.idList === await getListIdByName(config.listNewIdeas) ? "New Ideas" : "Backlog"}.\n\n${JSON.stringify(revoked, null, 2)}`);
 }
 
 export function handleCardReadyForAgent(cardId: string): void {

@@ -1,19 +1,29 @@
-# Trello Conductor (v0.1)
+# Trello Conductor
 
-Trello-webhook-driven orchestrator for the experimental Agentic SDLC. It
-validates that each webhook delivery came from Trello, then reacts to a card
-entering one of three lists:
-
-| Card enters | Conductor runs | On success moves to |
-| --- | --- | --- |
-| **Spec & Design** | [spec-design-agent](https://github.com/dbacks95fan/spec-design-agent) container (intent → `spec.md`) | Design Review |
-| **Ready for Build** | [coding-agent](https://github.com/dbacks95fan/coding-agent) (Work Contract → candidate) | Evaluation |
-| **Evaluation** | the NAS Evaluator (candidate Git revision → structured result) | Human Approval |
-
-Stage names follow the canonical lifecycle vocabulary in
+Webhook-driven control-plane service for the Agentic SDLC. It validates Trello
+webhook signatures, interprets authorized list transitions, verifies frozen
+work inputs, invokes assigned agents, and records visible workflow evidence.
+The canonical process is documented in
 [`agentic-sdlc/docs/WORKFLOW.md`](https://github.com/dbacks95fan/agentic-sdlc/blob/main/docs/WORKFLOW.md).
-Trello Conductor — not an agent — owns every Trello read and write. It never
-moves a card to Done and never records an approval.
+
+The PerioParrot board uses these ten lists, in order: New Ideas, Backlog,
+Prioritized, Spec & Design, Execution, Evaluation, Human Approval, Release,
+Production Observation, and Done. The Intent Creation Skill creates the initial
+card in New Ideas; the Conductor owns subsequent workflow state and freeze
+metadata.
+
+| Authorized transition | Conductor action |
+| --- | --- |
+| Backlog → Prioritized | Validate the pinned intent and policy profile; record an Active freeze projection and visible event. |
+| Prioritized → Spec & Design | Require the matching active freeze; stage exact intent/profile bytes and invoke Spec & Design. A ready spec is published for human review while the card stays in Spec & Design. |
+| Human-approved Spec & Design → Execution | The Coding Agent trigger is intended to require the accepted spec and work contract. The current adapter still reads the legacy card contract and must be reconciled before production deployment. |
+| Execution → Evaluation | Publish immutable candidate/evidence handoff and invoke the independent Evaluator. |
+| Evaluation → Human Approval | On evaluation pass, record the result and await the accountable human. |
+
+Returning a card to Backlog or New Ideas revokes its active freeze while
+preserving the event history. Human Approval, Release, Production Observation,
+and Done remain accountable human stages; the Conductor never records a human
+approval or moves work to Done automatically.
 
 Trello Conductor — not Claude — owns all Trello reads and writes. It calls the
 Trello REST API directly with a key/token/secret; the Coding Agent it invokes
@@ -35,12 +45,13 @@ src/
 ├── trello/
 │   ├── client.ts                thin Trello REST API wrapper (lists, cards, comments, webhooks)
 │   └── webhookVerify.ts         HMAC signature check on incoming deliveries
-├── workflow/
+   ├── workflow/
 │   ├── workflow.ts              the queues + per-card state machines
 │   ├── wip.ts                   WIP limit check against TRELLO_LIST_WORKING
 │   ├── contractFromCard.ts      deterministic card-description -> Work Contract parser
 │   ├── specRequestFromCard.ts   card metadata + intent-backlog fetch -> Spec & Design request
-│   ├── specWorkspace.ts         clones work/<intent-id>, freezes intent.md into it
+│   ├── specWorkspace.ts         clones work/<intent-id>, stages frozen intent/profile
+│   ├── freezeState.ts           reads/writes the current card freeze projection
 │   └── specRouting.ts           Spec & Design result -> board destination + decision brief
 ├── codingAgent/
 │   └── runCodingAgent.ts        spawns the coding-agent CLI as a subprocess
@@ -63,25 +74,24 @@ engineering-stage handler for that work item:
 
 1. It reads the intent projection the Intent Creation Skill writes onto the card
    description — `Product` (or `Product ID`), `Intent ID`, `Intent Version`,
-   `Intent Commit`, `Intent Hash`, `Canonical intent`
-   (`src/workflow/specRequestFromCard.ts`). `Intent Status` is read when present
-   but is **not** gated on: this workflow does not require a frozen intent to
-   enter Spec & Design. The freeze protocol remains described in
-   `agentic-sdlc/docs/WORKFLOW.md`; it is simply not enforced here.
+   `Intent Commit`, `Intent Hash`, `Canonical intent`, `Policy Profile ID`,
+   and `Policy Profile Version` (`src/workflow/specRequestFromCard.ts`). An Active Conductor
+   freeze must be present before the agent can start.
 2. It fetches the exact `intent.md` bytes from the `intent-backlog` repository at
    the pinned `Intent Commit` through the GitHub contents API, and refuses to
-   continue if the card projection and the canonical frontmatter disagree on
-   `intent_id`, `product_id`, `intent_version`, or `intent_hash`. A status
-   disagreement is surfaced as a warning rather than a refusal.
+   continue if the card and canonical intent disagree on identity, version,
+   content hash, or policy-profile ID/version. It resolves `product.yaml` and
+   the selected profile at that same pinned commit and verifies the profile.
 3. It creates the isolated `work/<intent-id>` workspace under
    `SPEC_WORKSPACE_ROOT` — a **full local clone** of `TARGET_REPO` with the work
    branch checked out at the current HEAD — writes the frozen bytes to
-   `.agent/work/<intent-id>/intent.md`, commits them on the work branch, and
-   computes their raw-byte `frozenArtifactSha256` (`src/workflow/specWorkspace.ts`).
+   `.agent/work/<intent-id>/intent.md` and `policy-profile.md`, commits them
+   on the work branch, and computes raw-byte fingerprints.
    A clone rather than a `git worktree`: a worktree's `.git` is a link file
    holding an absolute host path, which does not resolve inside a container.
 4. It builds a request per `spec-design-agent/schemas/spec-request.schema.json`
-   (`runId`, `workItem`, `productId`, `intent`, `target`, `approval`), writes it
+   (`runId`, `workItem`, `productId`, `intent`, `policyProfile`, `target`,
+   and Prioritized authorization), writes it
    into the workspace, and runs the agent as a one-shot Docker container with the
    workspace bind-mounted at `/work` (`src/specDesignAgent/runSpecDesignAgent.ts`):
 
@@ -112,10 +122,11 @@ engineering-stage handler for that work item:
    `docker inspect`, or the process list. Network egress and CA trust already
    work in the image; credentials were the only missing piece.
 5. It routes on the agent's result (`src/workflow/specRouting.ts`):
-   `spec_ready` → move to `TRELLO_LIST_DESIGN_REVIEW` with a decision brief;
-   `needs_decision` → move to `TRELLO_LIST_HUMAN_DECISION` (which now shares the
-   Human Approval list) with the itemised decisions; `blocked` / `failed` / unparseable → leave the card in place with
-   a comment. Design Review is a human step; the orchestrator never approves it.
+   `spec_ready` → publish a branch link for human review and leave the card in
+   Spec & Design;
+   `needs_decision` → leave the card in Spec & Design with itemised decisions;
+   `blocked` / `failed` / unparseable → leave the card in place with a
+   comment. Human review remains in this column; the orchestrator never approves it.
 6. On `spec_ready` the **Conductor** pushes the work branch and comments its URL,
    so a human Design Reviewer has something to open. The agent does not push:
    `AGENT_ROLES.md` grants it no write authority over the product repository, and
@@ -123,19 +134,16 @@ engineering-stage handler for that work item:
    publishes a branch. A failed push is reported on the card; the spec is still
    committed locally on the work branch.
 
-**`approval` is a v0.1 approximation.** `approvedAt` is the intent's `frozen_at`
-when the frontmatter carries it, otherwise the timestamp of the move into Spec &
-Design; `approvedBy` is the Trello member who moved the card. Capturing the
-freeze at `Prioritized` — where it actually happens — would supply these
-directly. (The request field is named `approval.readyForPlanning` after the
-stage name in `agentic-sdlc/docs/WORKFLOW.md`; this board freezes at
-`Prioritized`, and the two names refer to the same gate.)
+The Prioritized transition records the authorizing member and timestamp.
+Spec & Design re-resolves both artifacts and checks their exact fingerprints
+against that freeze before invocation. A generated spec is not an approval;
+human review remains within Spec & Design.
 
-**This half follows the canonical model** (intent-backlog repo,
-`INT-<PRODUCT>-NNNN` work items, `work/<intent-id>` branch). The existing coding
-and evaluation triggers still use the older board vocabulary and derive
-`TRELLO-<idShort>` work items from an intent committed in `TARGET_REPO`; the two
-halves do not yet meet end to end.
+**Known end-to-end gap:** the Coding Agent adapter still derives a legacy Work
+Contract from card sections and a local intent instead of validating the
+accepted `spec.md` and `work-contract.yaml` produced by Spec & Design. Do not
+deploy this change as a complete SDLC until that input boundary is reconciled
+with the Coding Agent's existing contract.
 
 ## What it does, step by step
 
@@ -144,7 +152,7 @@ halves do not yet meet end to end.
 2. `src/trello/webhookVerify.ts` checks the `X-Trello-Webhook` HMAC signature
    against the raw request body — deliveries that don't verify are rejected
    with 401 and never reach the workflow logic.
-3. If the event says a card moved into `TRELLO_LIST_READY`, the card is queued
+3. If the event says a card moved into `TRELLO_LIST_WORKING`, the card is queued
    (`src/workflow/workflow.ts`).
 4. The queue drains one card at a time, gated by `WIP_LIMIT` cards currently in
    `TRELLO_LIST_WORKING` (`src/workflow/wip.ts`) — if full, the card waits in
@@ -259,7 +267,7 @@ coding and evaluation triggers are unaffected.
   which means a new webhook registration — the old one is left dangling on
   Trello (harmless, just unused) until manually cleaned up. A named tunnel with
   a real domain would fix this; out of scope for now.
-- **The WIP queue is in-memory only.** A card sitting in `Ready for Build`
+- **The WIP queue is in-memory only.** A card sitting in `Execution`
   when Trello Conductor restarts will not be picked up automatically — move
   it out and back into the list to re-trigger the webhook, or wait for a
   future periodic-sweep fallback (not built yet).

@@ -14,6 +14,7 @@ import {
 const COMMIT = "a".repeat(40);
 const PATH = "products/mealflow/intents/INT-MF-0042/intent.md";
 const CANONICAL = `https://github.com/dbacks95fan/intent-backlog/blob/${COMMIT}/${PATH}`;
+const PROFILE = "Profile ID: MF-DEFAULT\nVersion: 1\n";
 
 function intentMarkdown(overrides: Record<string, string> = {}): string {
   const fm: Record<string, string> = {
@@ -25,6 +26,8 @@ function intentMarkdown(overrides: Record<string, string> = {}): string {
     status: "Frozen",
     intent_commit: COMMIT,
     intent_hash: `sha256:${"d".repeat(64)}`,
+    policy_profile_id: "MF-DEFAULT",
+    policy_profile_version: "1",
     frozen_at: "2026-08-01T12:00:00.000Z",
     ...overrides,
   };
@@ -52,6 +55,8 @@ function description(overrides: Record<string, string> = {}): string {
     "Intent Hash": `sha256:${"d".repeat(64)}`,
     "Intent Status": "Frozen",
     "Canonical intent": CANONICAL,
+    "Policy Profile ID": "MF-DEFAULT",
+    "Policy Profile Version": "1",
     ...overrides,
   };
   return [
@@ -63,7 +68,12 @@ function description(overrides: Record<string, string> = {}): string {
 }
 
 function stubFetch(body: string, init: ResponseInit = { status: 200 }): typeof fetch {
-  return (async () => new Response(body, init)) as typeof fetch;
+  return (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes("/product.yaml?")) return new Response("policy_profiles:\n  MF-DEFAULT: policy-profiles/default.md\n", init);
+    if (url.includes("/policy-profiles/default.md?")) return new Response(PROFILE, init);
+    return new Response(body, init);
+  }) as typeof fetch;
 }
 
 const baseOptions = {
@@ -93,9 +103,7 @@ test("parseCardIntentMetadata rejects a card missing projected metadata", () => 
   assert.throws(() => parseCardIntentMetadata(card(desc)), (err: Error) => err instanceof SpecRequestError && /Intent ID/.test(err.message));
 });
 
-test("parseCardIntentMetadata does not gate on a frozen intent", () => {
-  // The freeze protocol still exists in agentic-sdlc/docs, but the workflow no
-  // longer requires a frozen intent to enter Spec & Design.
+test("parseCardIntentMetadata leaves freeze authorization to the Conductor", () => {
   for (const status of ["New Ideas", "Refining", "Accepted", "Frozen"]) {
     const meta = parseCardIntentMetadata(card(description({ "Intent Status": status })));
     assert.equal(meta.intentStatus, status);
@@ -138,6 +146,8 @@ test("resolveSpecRequest returns a request grounded in the fetched frozen intent
   assert.equal(resolved.intentPath, PATH);
   assert.equal(resolved.intentContentSha256, "d".repeat(64));
   assert.deepEqual(resolved.frozenIntentBytes, Buffer.from(markdown));
+  assert.equal(resolved.policyProfileId, "MF-DEFAULT");
+  assert.deepEqual(resolved.frozenPolicyProfileBytes, Buffer.from(PROFILE));
   assert.equal(frozenArtifactSha256(resolved.frozenIntentBytes), createHash("sha256").update(markdown).digest("hex"));
   // frozen_at from the artifact wins over the Trello move timestamp
   assert.equal(resolved.approvedAt, "2026-08-01T12:00:00.000Z");
@@ -149,9 +159,9 @@ test("resolveSpecRequest sends bearer auth and pins the ref to the card commit",
   let seenUrl = "";
   let seenAuth: string | null = null;
   const fetchFn = (async (url: string, init: RequestInit) => {
-    seenUrl = url;
+    if (url.includes("intent.md?")) seenUrl = url;
     seenAuth = new Headers(init.headers).get("authorization");
-    return new Response(intentMarkdown());
+    return stubFetch(intentMarkdown())(url, init);
   }) as unknown as typeof fetch;
 
   await resolveSpecRequest(card(description()), { ...baseOptions, githubToken: "ghp_x", fetchFn });

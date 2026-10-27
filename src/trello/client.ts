@@ -107,6 +107,14 @@ export async function moveCard(cardId: string, listId: string): Promise<void> {
   });
 }
 
+export async function updateCardDescription(cardId: string, desc: string): Promise<void> {
+  await trelloFetch(`/cards/${cardId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ desc }),
+  });
+}
+
 export async function commentOnCard(cardId: string, text: string): Promise<void> {
   await trelloFetch(`/cards/${cardId}/actions/comments`, {
     method: "POST",

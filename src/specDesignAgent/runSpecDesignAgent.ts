@@ -17,6 +17,14 @@ export interface SpecDesignRequest {
     frozenArtifactSha256: string;
     contentSha256: string;
   };
+  policyProfile: {
+    repository: string;
+    commit: string;
+    path: string;
+    profileId: string;
+    version: string;
+    frozenArtifactSha256: string;
+  };
   target: {
     repository: string;
     baseCommit: string;
@@ -24,7 +32,7 @@ export interface SpecDesignRequest {
     workspace: string;
   };
   approval: {
-    readyForPlanning: boolean;
+    prioritized: boolean;
     approvedBy: string;
     approvedAt: string;
   };
