@@ -14,8 +14,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Rejects malformed templates before a board mutation can occur. */
 export function parseBoardWorkflowTemplate(source: string): BoardWorkflowTemplate {
   const parsed: unknown = parse(source);
-  if (!isRecord(parsed) || parsed.template_version !== 1 || !Array.isArray(parsed.lists)) {
-    throw new Error("Board workflow template must declare template_version: 1 and a lists array.");
+  if (!isRecord(parsed) || ![1, 2].includes(parsed.template_version as number) || !Array.isArray(parsed.lists)) {
+    throw new Error("Board workflow template must declare a supported template_version (1 or 2) and a lists array.");
   }
 
   const listNames = parsed.lists;
@@ -26,7 +26,7 @@ export function parseBoardWorkflowTemplate(source: string): BoardWorkflowTemplat
     throw new Error("Board workflow template list names must be unique.");
   }
 
-  return { templateVersion: 1, listNames: Object.freeze([...listNames]) };
+  return { templateVersion: parsed.template_version as number, listNames: Object.freeze([...listNames]) };
 }
 
 /** Reads the repository-owned board template used by the Conductor bootstrap command. */

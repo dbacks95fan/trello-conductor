@@ -40,8 +40,7 @@ export interface TrelloComment {
 
 let listCache: TrelloList[] | null = null;
 
-/** Lists are looked up by name at call time (cached briefly) rather than hardcoded IDs,
- *  so renaming/recreating lists in Trello doesn't require redeploying Trello Conductor. */
+/** Fetches lists from the configured board for setup operations and ID-membership validation. */
 export async function getLists(forceRefresh = false): Promise<TrelloList[]> {
   if (listCache && !forceRefresh) return listCache;
   listCache = await trelloFetch<TrelloList[]>(`/boards/${config.boardId}/lists`);
@@ -75,41 +74,77 @@ export interface WorkflowListIds {
   done: string;
 }
 
-/** Resolve every canonical workflow list by its configured exact name and reject ambiguity. */
-export async function getWorkflowListIds(): Promise<WorkflowListIds> {
-  const names = [
-    config.listNewIdeas,
-    config.listBacklog,
-    config.listPrioritized,
-    config.listSpecDesign,
-    config.listWorking,
-    config.listReview,
-    config.listHumanApproval,
-    config.listRelease,
-    config.listProductionObservation,
-    config.listDone,
-  ];
-  const lists = await getLists(true);
-  const ids = names.map((name) => {
-    const matches = lists.filter((list) => list.name === name);
-    if (matches.length !== 1) {
-      throw new Error(`Expected exactly one board list named "${name}"; found ${matches.length}.`);
-    }
-    return matches[0].id;
-  });
-  if (new Set(ids).size !== ids.length) throw new Error("Canonical workflow list names must resolve to distinct Trello list IDs.");
-  return {
-    newIdeas: ids[0],
-    backlog: ids[1],
-    prioritized: ids[2],
-    specDesign: ids[3],
-    execution: ids[4],
-    evaluation: ids[5],
-    humanApproval: ids[6],
-    release: ids[7],
-    productionObservation: ids[8],
-    done: ids[9],
+export interface ProductBoardConfig {
+  schema_version: "1.1";
+  trello_board_id: string;
+  trello_lists: {
+    new_ideas: string;
+    backlog: string;
+    prioritized: string;
+    spec_design: string;
+    execution: string;
+    evaluation: string;
+    human_approval: string;
+    release: string;
+    production_observation: string;
+    done: string;
   };
+}
+
+const stageLabels: Record<keyof WorkflowListIds, string> = {
+  newIdeas: "New Ideas",
+  backlog: "Backlog",
+  prioritized: "Prioritized",
+  specDesign: "Spec & Design",
+  execution: "Execution",
+  evaluation: "Evaluation",
+  humanApproval: "Human Approval",
+  release: "Release",
+  productionObservation: "Production Observation",
+  done: "Done",
+};
+
+let activeWorkflowListIds: WorkflowListIds | null = null;
+
+/** Validate a product's explicit stage-to-list mapping against the configured Trello board. */
+export async function getWorkflowListIds(product: ProductBoardConfig): Promise<WorkflowListIds> {
+  const boardId = await resolveBoardId();
+  if (product.trello_board_id !== boardId) {
+    throw new Error(`ProductConfig board ${product.trello_board_id} does not match the configured Trello board ${boardId}.`);
+  }
+  const ids = Object.values(product.trello_lists);
+  if (ids.some((id) => typeof id !== "string" || id.length === 0)) {
+    throw new Error("ProductConfig must map every canonical workflow stage to a non-empty Trello list ID.");
+  }
+  if (new Set(ids).size !== ids.length) throw new Error("ProductConfig trello_lists must map each canonical stage to a distinct Trello list ID.");
+  const lists = await getLists(true);
+  const listIdsOnBoard = new Set(lists.map((list) => list.id));
+  const missingIds = ids.filter((id) => !listIdsOnBoard.has(id));
+  if (missingIds.length > 0) throw new Error(`ProductConfig contains Trello list IDs that are not on board ${boardId}: ${missingIds.join(", ")}.`);
+  const configured: WorkflowListIds = {
+    newIdeas: product.trello_lists.new_ideas,
+    backlog: product.trello_lists.backlog,
+    prioritized: product.trello_lists.prioritized,
+    specDesign: product.trello_lists.spec_design,
+    execution: product.trello_lists.execution,
+    evaluation: product.trello_lists.evaluation,
+    humanApproval: product.trello_lists.human_approval,
+    release: product.trello_lists.release,
+    productionObservation: product.trello_lists.production_observation,
+    done: product.trello_lists.done,
+  };
+  activeWorkflowListIds = configured;
+  return configured;
+}
+
+/** Returns the current product board's validated list ID for a canonical stage. */
+export function getWorkflowListId(stage: keyof WorkflowListIds): string {
+  if (!activeWorkflowListIds) throw new Error("No ProductConfig 1.1 workflow list mapping has been validated for this board.");
+  return activeWorkflowListIds[stage];
+}
+
+export function getWorkflowStageLabel(stage: keyof WorkflowListIds): string {
+  return stageLabels[stage];
 }
 
 /** Creates a named board list and invalidates the list cache for subsequent validation. */

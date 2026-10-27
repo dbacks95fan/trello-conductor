@@ -10,12 +10,12 @@ const EVENT_MARKER = "<!-- agentic-sdlc-board-transition ";
 
 export interface BoardTransitionDependencies {
   boardId: string;
-  listIds: WorkflowListIds;
   validator: LifecycleValidator;
   getCard(cardId: string): Promise<TrelloCard>;
   getCardComments(cardId: string): Promise<TrelloComment[]>;
   commentOnCard(cardId: string, text: string): Promise<void>;
   getProductConfig(card: TrelloCard): Promise<ProductConfig>;
+  getWorkflowListIds(product: ProductConfig): Promise<WorkflowListIds>;
   dispatch(action: string, event: BoardTransitionEvent, card: TrelloCard): Promise<void>;
 }
 
@@ -66,7 +66,14 @@ export async function processBoardTransition(
     const priorComments = await deps.getCardComments(event.card_id);
     if (containsEvent(priorComments, event.event_id)) return { disposition: "duplicate" };
 
-    const resolution = resolveTransition(event.from_list_id, event.to_list_id, deps.listIds);
+    const product = await deps.getProductConfig(card);
+    const productValidation = deps.validator.validate("ProductConfig", product);
+    if (!productValidation.valid) {
+      return block(event, deps, `The product configuration is invalid: ${productValidation.errors.join("; ")}`);
+    }
+    if (product.trello_board_id !== event.board_id) return block(event, deps, "The product configuration belongs to a different board.");
+    const listIds = await deps.getWorkflowListIds(product);
+    const resolution = resolveTransition(event.from_list_id, event.to_list_id, listIds);
     await deps.commentOnCard(
       event.card_id,
       `${EVENT_MARKER}${JSON.stringify(event)} -->\nTransition observed: ${resolution.from ?? "unknown"} -> ${resolution.to ?? "unknown"}.`,
@@ -74,12 +81,6 @@ export async function processBoardTransition(
     if (resolution.action === "invalid") return block(event, deps, "This move is not an authorized in-order lifecycle transition.");
 
     if (resolution.requiresProductOwner) {
-      const product = await deps.getProductConfig(card);
-      const productValidation = deps.validator.validate("ProductConfig", product);
-      if (!productValidation.valid) {
-        return block(event, deps, `The product configuration is invalid: ${productValidation.errors.join("; ")}`);
-      }
-      if (product.trello_board_id !== event.board_id) return block(event, deps, "The product configuration belongs to a different board.");
       if (!product.authorized_product_owner_ids.includes(event.actor_id)) {
         return block(event, deps, "The Trello actor is not an authorized product owner for this product.");
       }

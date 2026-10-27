@@ -6,7 +6,7 @@ import { routeSpecResult } from "./specRouting.js";
 import { prepareSpecWorkspace, publishSpecBranch, readCommittedWorkspaceFile } from "./specWorkspace.js";
 import { prepareGitEvaluationHandoff } from "../evaluatorAgent/gitHandoff.js";
 import { runRemoteEvaluator } from "../evaluatorAgent/remote.js";
-import { commentOnCard, getCard, getListIdByName, moveCard, updateCardDescription } from "../trello/client.js";
+import { commentOnCard, getCard, getWorkflowListId, getWorkflowStageLabel, moveCard, updateCardDescription } from "../trello/client.js";
 import { config } from "../config.js";
 import { isUnderWipLimit } from "./wip.js";
 import { randomUUID } from "node:crypto";
@@ -106,7 +106,7 @@ async function processCard(execution: AcceptedExecution): Promise<void> {
   let repositoryPath = "";
   let baseBranch = "";
   try {
-    const executionListId = await getListIdByName(config.listWorking);
+    const executionListId = getWorkflowListId("execution");
     if (card.idList !== executionListId) throw new Error("The card no longer resides in Execution.");
     const loaded = await loadAcceptedExecutionContract({
       card,
@@ -129,8 +129,8 @@ async function processCard(execution: AcceptedExecution): Promise<void> {
     throw err;
   }
 
-  const workingListId = await getListIdByName(config.listWorking);
-  const reviewListId = await getListIdByName(config.listReview);
+  const workingListId = getWorkflowListId("execution");
+  const reviewListId = getWorkflowListId("evaluation");
   if (card.idList !== workingListId) return;
   await commentOnCard(cardId, `🤖 Coding Agent started (work item \`${contract.work_item}\`).`);
 
@@ -169,7 +169,7 @@ async function processCard(execution: AcceptedExecution): Promise<void> {
     evidencePath: join(repositoryPath, ".agent", "evidence", `${workItem}-${runId}.json`),
   });
   const handoffComment = JSON.stringify(handoff);
-  await commentOnCard(cardId, `${handoffMarker}${handoffComment} -->\n🔎 Independent evaluation is ready from Git revision \`${handoff.revision}\`. Moving this card to ${config.listReview} starts the Evaluator Agent.`);
+  await commentOnCard(cardId, `${handoffMarker}${handoffComment} -->\n🔎 Independent evaluation is ready from Git revision \`${handoff.revision}\`. Moving this card to ${getWorkflowStageLabel("evaluation")} starts the Evaluator Agent.`);
   await moveCard(cardId, reviewListId);
 }
 
@@ -179,7 +179,7 @@ async function evaluateCard(cardId: string): Promise<void> {
   const comments = await getCardComments(cardId);
   const handoffComment = comments.find((comment) => comment.data.text?.startsWith(handoffMarker));
   if (!handoffComment?.data.text) {
-    await commentOnCard(cardId, `⚠️ ${config.listReview} was entered without an evaluator handoff. No evaluator run was started.`);
+    await commentOnCard(cardId, `⚠️ ${getWorkflowStageLabel("evaluation")} was entered without an evaluator handoff. No evaluator run was started.`);
     return;
   }
   let handoff: { repositoryUrl?: string; revision?: string; intentPath?: string; contractPath?: string; evidencePath?: string };
@@ -194,7 +194,7 @@ async function evaluateCard(cardId: string): Promise<void> {
     await commentOnCard(cardId, "⚠️ The evaluator handoff is incomplete. No evaluator run was started.");
     return;
   }
-  await commentOnCard(cardId, `🔎 Independent Evaluator Agent started because the card entered ${config.listReview}.`);
+  await commentOnCard(cardId, `🔎 Independent Evaluator Agent started because the card entered ${getWorkflowStageLabel("evaluation")}.`);
 
   let evaluated;
   try {
@@ -209,12 +209,12 @@ async function evaluateCard(cardId: string): Promise<void> {
       evidencePath: handoff.evidencePath,
     });
   } catch (err) {
-    await commentOnCard(cardId, `❌ Evaluator could not start: ${err instanceof Error ? err.message : String(err)}. Card remains in ${config.listReview}.`);
+    await commentOnCard(cardId, `❌ Evaluator could not start: ${err instanceof Error ? err.message : String(err)}. Card remains in ${getWorkflowStageLabel("evaluation")}.`);
     return;
   }
 
   if (!evaluated.evaluation) {
-    await commentOnCard(cardId, `❌ Evaluator produced no parseable result (exit code ${evaluated.exitCode}). Card remains in ${config.listReview} for investigation.\n\n\`\`\`\n${evaluated.rawOutput.slice(-1500)}\n\`\`\``);
+    await commentOnCard(cardId, `❌ Evaluator produced no parseable result (exit code ${evaluated.exitCode}). Card remains in ${getWorkflowStageLabel("evaluation")} for investigation.\n\n\`\`\`\n${evaluated.rawOutput.slice(-1500)}\n\`\`\``);
     return;
   }
 
@@ -242,16 +242,16 @@ async function evaluateCard(cardId: string): Promise<void> {
   await commentOnCard(cardId, comment);
 
   if (status === "pass") {
-    const humanApprovalListId = await getListIdByName(config.listHumanApproval);
+    const humanApprovalListId = getWorkflowListId("humanApproval");
     await moveCard(cardId, humanApprovalListId);
     await commentOnCard(cardId, "✅ Independent evaluation passed. Awaiting Human Approval. Trello Conductor never moves work to Done.");
   } else if (status === "fail") {
-    await commentOnCard(cardId, `↩️ Independent evaluation failed. Findings require implementation rework. Card remains in ${config.listReview}; automatic retry is intentionally not enabled in v0.1.`);
+    await commentOnCard(cardId, `↩️ Independent evaluation failed. Findings require implementation rework. Card remains in ${getWorkflowStageLabel("evaluation")}; automatic retry is intentionally not enabled in v0.1.`);
   } else if (status === "needs_decision") {
     // Keep the request in Evaluation; the card move itself remains human-authorized.
     await commentOnCard(cardId, "❓ Evaluator requires human judgment. The decision brief above contains the evidence, options, and consequence of waiting.");
   } else {
-    await commentOnCard(cardId, `⚠️ Unknown evaluator status \`${status}\`. Card remains in ${config.listReview}.`);
+    await commentOnCard(cardId, `⚠️ Unknown evaluator status \`${status}\`. Card remains in ${getWorkflowStageLabel("evaluation")}.`);
   }
 }
 
@@ -528,7 +528,7 @@ export async function handleCardPrioritized(cardId: string, approval: MoveApprov
     await commentOnCard(cardId, `<!-- agentic-sdlc-freeze-event ${JSON.stringify(freezeRecord)} -->\nValidated Prioritized freeze activation record.`);
     await commentOnCard(cardId, `🔒 Prioritized freeze activated.\n\n${JSON.stringify(projection, null, 2)}`);
   } catch (err) {
-    const backlogId = await getListIdByName(config.listBacklog);
+    const backlogId = getWorkflowListId("backlog");
     await moveCard(cardId, backlogId);
     await commentOnCard(cardId, `⛔ Prioritized freeze was not activated; the card was returned to Backlog.\n\n${err instanceof Error ? err.message : String(err)}`);
   }
@@ -560,7 +560,7 @@ export async function handleCardFreezeRevocation(cardId: string, revokedBy: stri
   const revoked = { ...projection, state: "Revoked" as const, revokedBy, revokedAt };
   await updateCardDescription(cardId, writeFreezeProjection(card.desc ?? "", revoked));
   await commentOnCard(cardId, `<!-- agentic-sdlc-freeze-event ${JSON.stringify(freezeRecord)} -->\nValidated Prioritized freeze revocation record.`);
-  await commentOnCard(cardId, `🔓 Prioritized freeze revoked because the card returned to ${card.idList === await getListIdByName(config.listNewIdeas) ? "New Ideas" : "Backlog"}.\n\n${JSON.stringify(revoked, null, 2)}`);
+  await commentOnCard(cardId, `🔓 Prioritized freeze revoked because the card returned to ${card.idList === getWorkflowListId("newIdeas") ? getWorkflowStageLabel("newIdeas") : getWorkflowStageLabel("backlog")}.\n\n${JSON.stringify(revoked, null, 2)}`);
 }
 
 export function handleCardReadyForAgent(cardId: string, acceptance: Record<string, unknown>, workspaceRef: string, targetCommit: string): void {

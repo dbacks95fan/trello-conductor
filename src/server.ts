@@ -1,6 +1,6 @@
 import express from "express";
 import { config, webhookUrl } from "./config.js";
-import { ensureWebhook, getCard, getCardComments, getWorkflowListIds, resolveBoardId, commentOnCard, type TrelloCard, type WorkflowListIds } from "./trello/client.js";
+import { ensureWebhook, getCard, getCardComments, getWorkflowListIds, resolveBoardId, commentOnCard, type TrelloCard } from "./trello/client.js";
 import { verifyTrelloSignature } from "./trello/webhookVerify.js";
 import { handleCardFreezeRevocation, handleCardPrioritized, handleCardReadyForAgent, handleCardReviewForAgent, handleCardSpecAndDesign } from "./workflow/workflow.js";
 import { createLifecycleValidator } from "./contracts/lifecycle.js";
@@ -12,7 +12,6 @@ import { activeFreezeForCard } from "./workflow/freezeState.js";
 
 const lifecycleValidator = createLifecycleValidator(config.lifecycleSchemaPath);
 let configuredBoardId = "";
-let workflowListIds: WorkflowListIds;
 
 const app = express();
 
@@ -75,7 +74,6 @@ app.post("/webhooks/trello", async (req, res) => {
   if (!event) return;
   void processBoardTransition(event, {
     boardId: configuredBoardId,
-    listIds: workflowListIds,
     validator: lifecycleValidator,
     getCard,
     getCardComments,
@@ -89,6 +87,7 @@ app.post("/webhooks/trello", async (req, res) => {
       });
       return resolved.productConfig;
     },
+    getWorkflowListIds,
     dispatch: async (action, transition, card) => {
       const approval = { approvedBy: transition.actor_id, approvedAt: transition.occurred_at, eventId: transition.event_id };
       switch (action) {
@@ -187,10 +186,8 @@ app.post("/webhooks/trello", async (req, res) => {
 });
 
 async function main() {
-  // Fail fast and loud if the configured lists don't exist — better than
-  // silently never matching anything.
-  workflowListIds = await getWorkflowListIds();
-
+  // Resolve the board ID for webhook registration. ProductConfig 1.1 supplies
+  // the stage-to-list mapping, which is validated against Trello per event.
   // Must be listening BEFORE asking Trello to register the webhook — Trello
   // does an immediate reachability check (a HEAD request) against the callback
   // URL as part of registration, which would fail against a tunnel pointed at

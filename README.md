@@ -6,11 +6,14 @@ work inputs, invokes assigned agents, and records visible workflow evidence.
 The canonical process is documented in
 [`agentic-sdlc/docs/WORKFLOW.md`](https://github.com/dbacks95fan/agentic-sdlc/blob/main/docs/WORKFLOW.md).
 
-The PerioParrot board uses these ten lists, in order: New Ideas, Backlog,
-Prioritized, Spec & Design, Execution, Evaluation, Human Approval, Release,
-Production Observation, and Done. The Intent Creation Skill creates the initial
-card in New Ideas; the Conductor owns subsequent workflow state and freeze
-metadata.
+The Conductor has no product-specific board or list IDs. Each product's
+`ProductConfig` 1.1 supplies the Trello board ID and the list ID for each of the
+ten canonical stages. Existing boards can use different list names because
+stage routing uses configured IDs, not visual order or name matching. The
+Intent Creation Skill creates the initial card in New Ideas; the Conductor owns
+subsequent workflow state and freeze metadata. Each running instance currently
+subscribes to the single board selected by `TRELLO_BOARD_ID`; it can be set up
+for any product board, but simultaneous multi-board processing is not supported.
 
 | Authorized transition | Conductor action |
 | --- | --- |
@@ -22,7 +25,7 @@ metadata.
 
 Returning a card from Prioritized or Spec & Design to Backlog or New Ideas
 revokes its active freeze while preserving the event history. The webhook
-boundary uses Trello IDs rather than list names, checks current card state,
+boundary uses the product's configured Trello board and list IDs, checks current card state,
 blocks out-of-order moves, validates owner identity, and deduplicates event IDs.
 Later human records are not enforced yet; see
 [`docs/HUMAN_RECORDS.md`](docs/HUMAN_RECORDS.md).
@@ -49,7 +52,7 @@ src/
 │   └── webhookVerify.ts         HMAC signature check on incoming deliveries
    ├── workflow/
 │   ├── workflow.ts              the queues + per-card state machines
-│   ├── wip.ts                   WIP limit check against TRELLO_LIST_WORKING
+│   ├── wip.ts                   WIP limit check against the configured Execution list ID
 │   ├── contractFromCard.ts      deterministic card-description -> Work Contract parser
 │   ├── specRequestFromCard.ts   card metadata + intent-backlog fetch -> Spec & Design request
 │   ├── specWorkspace.ts         clones work/<intent-id>, stages frozen intent/profile
@@ -71,7 +74,7 @@ point with a tool it invokes.
 
 ## Spec & Design trigger
 
-When a card enters `TRELLO_LIST_SPEC_DESIGN` the orchestrator acts as the first
+When a card enters the configured `Spec & Design` list ID the orchestrator acts as the first
 engineering-stage handler for that work item:
 
 1. It reads the intent projection the Intent Creation Skill writes onto the card
@@ -178,7 +181,7 @@ manual and are not enforced by this build.
    and Evidence Package in the candidate branch, pushes the branch, and writes
    the repository URL, commit SHA, and repository-relative artifact paths to
    the evaluator handoff comment.
-8. When the card enters `TRELLO_LIST_REVIEW`, Trello Conductor calls the
+8. When the card enters the configured `Evaluation` list ID, Trello Conductor calls the
    authenticated `EVALUATOR_API_URL` endpoint. The evaluator validates the
    allowed repository URL, checks out the supplied SHA into request-scoped
    temporary storage, and returns its JSON result.
@@ -192,7 +195,7 @@ manual and are not enforced by this build.
 ```
 npm install
 npm run build
-cp .env.example .env   # fill in TRELLO_API_KEY, TRELLO_TOKEN, TRELLO_API_SECRET, CALLBACK_URL
+cp .env.example .env   # fill in Trello credentials, TRELLO_BOARD_ID, and CALLBACK_URL
 ```
 
 You need a public HTTPS URL for `CALLBACK_URL` before starting — Trello's
@@ -257,10 +260,11 @@ When the report contains no duplicate or unexpected lists, apply the template:
 npm run bootstrap-board -- --apply
 ```
 
-The command creates missing lists and establishes the canonical order. It never
-moves or deletes cards. It refuses to apply when an existing list has no
-unambiguous template mapping, so a legacy board cannot lose work through an
-automatic migration.
+The command creates missing canonical lists and establishes their order on an
+existing board. It never creates a board, moves cards, or deletes lists. It
+refuses to apply when existing lists make template reconciliation ambiguous.
+Runtime transition routing uses the explicit list IDs in the product's
+reviewed `ProductConfig` 1.1.
 
 The orchestrator never builds the image — if Docker is not running or the image
 is missing, the card gets a comment saying so and stays in Spec & Design; the

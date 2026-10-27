@@ -1,5 +1,5 @@
 // ABOUTME: Resolves a Spec & Design work request from a Trello card and the intent in intent-backlog.
-import type { TrelloCard } from "../trello/client.js";
+import type { ProductBoardConfig, TrelloCard } from "../trello/client.js";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -21,11 +21,9 @@ async function configuredRepositoryUrl(): Promise<string> {
   }
 }
 
-export interface ProductConfig {
-  schema_version: "1.0";
+export interface ProductConfig extends ProductBoardConfig {
   product_id: string;
   product_name: string;
-  trello_board_id: string;
   target_repository: string;
   authorized_product_owner_ids: string[];
   policy_profiles: Record<string, string>;

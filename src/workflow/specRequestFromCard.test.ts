@@ -70,7 +70,7 @@ function description(overrides: Record<string, string> = {}): string {
 function stubFetch(body: string, init: ResponseInit = { status: 200 }): typeof fetch {
   return (async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.includes("/product.yaml?")) return new Response('schema_version: "1.0"\nproduct_id: MF\nproduct_name: MealFlow\ntrello_board_id: board-1\ntarget_repository: https://github.com/example/mealflow\nauthorized_product_owner_ids:\n  - owner-1\npolicy_profiles:\n  MF-DEFAULT: policy-profiles/default.md\n', init);
+    if (url.includes("/product.yaml?")) return new Response('schema_version: "1.1"\nproduct_id: MF\nproduct_name: MealFlow\ntrello_board_id: board-1\ntrello_lists:\n  new_ideas: list-new\n  backlog: list-backlog\n  prioritized: list-prioritized\n  spec_design: list-spec\n  execution: list-execution\n  evaluation: list-evaluation\n  human_approval: list-human-approval\n  release: list-release\n  production_observation: list-observation\n  done: list-done\ntarget_repository: https://github.com/example/mealflow\nauthorized_product_owner_ids:\n  - owner-1\npolicy_profiles:\n  MF-DEFAULT: policy-profiles/default.md\n', init);
     if (url.includes("/policy-profiles/default.md?")) return new Response(PROFILE, init);
     return new Response(body, init);
   }) as typeof fetch;
