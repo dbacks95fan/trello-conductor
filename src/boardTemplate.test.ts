@@ -8,6 +8,11 @@ test("parses a versioned board template with unique lifecycle lists", () => {
   assert.deepEqual(template.listNames, ["New Ideas", "Backlog"]);
 });
 
+test("accepts the current canonical template version", () => {
+  const template = parseBoardWorkflowTemplate("template_version: 2\nlists:\n  - New Ideas\n  - Backlog\n");
+  assert.equal(template.templateVersion, 2);
+});
+
 test("rejects duplicate board list names", () => {
   assert.throws(
     () => parseBoardWorkflowTemplate("template_version: 1\nlists:\n  - Backlog\n  - Backlog\n"),

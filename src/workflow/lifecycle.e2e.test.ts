@@ -23,10 +23,22 @@ const lists: WorkflowListIds = {
 };
 
 const product = {
-  schema_version: "1.0" as const,
+  schema_version: "1.1" as const,
   product_id: "MF",
   product_name: "MealFlow",
   trello_board_id: "board-1",
+  trello_lists: {
+    new_ideas: lists.newIdeas,
+    backlog: lists.backlog,
+    prioritized: lists.prioritized,
+    spec_design: lists.specDesign,
+    execution: lists.execution,
+    evaluation: lists.evaluation,
+    human_approval: lists.humanApproval,
+    release: lists.release,
+    production_observation: lists.productionObservation,
+    done: lists.done,
+  },
   target_repository: "https://github.com/example/mealflow",
   authorized_product_owner_ids: ["owner-1"],
   policy_profiles: { "MF-DEFAULT": "products/mealflow/policy-profiles/default.md" },
@@ -74,12 +86,12 @@ test("runs the canonical happy-path transitions with schema-valid local test dou
     };
     const result = await processBoardTransition(event, {
       boardId: "board-1",
-      listIds: lists,
       validator,
       getCard: async () => card,
       getCardComments: async () => comments,
       commentOnCard: async (_id, text) => { comments.push({ id: `comment-${comments.length + 1}`, data: { text } }); },
       getProductConfig: async () => product,
+      getWorkflowListIds: async () => lists,
       dispatch: async (action) => { actions.push(action); },
     });
     assert.equal(result.disposition, "accepted", `${from} -> ${to}: ${result.reason ?? ""}`);

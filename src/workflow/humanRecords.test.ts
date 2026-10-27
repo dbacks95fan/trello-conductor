@@ -39,10 +39,22 @@ const contract = {
 const spec = "# Spec\n\nAccepted behavior.\n";
 const contractText = JSON.stringify(contract);
 const productConfig: ProductConfig = {
-  schema_version: "1.0",
+  schema_version: "1.1",
   product_id: "MF",
   product_name: "MealFlow",
   trello_board_id: "board-1",
+  trello_lists: {
+    new_ideas: "list-new",
+    backlog: "list-backlog",
+    prioritized: "list-prioritized",
+    spec_design: "list-spec",
+    execution: "list-execution",
+    evaluation: "list-evaluation",
+    human_approval: "list-human-approval",
+    release: "list-release",
+    production_observation: "list-observation",
+    done: "list-done",
+  },
   target_repository: repo,
   authorized_product_owner_ids: ["owner-1"],
   policy_profiles: { "MF-DEFAULT": "products/mealflow/policy-profiles/default.md" },

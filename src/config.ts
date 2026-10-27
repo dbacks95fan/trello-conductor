@@ -23,16 +23,6 @@ export const config = {
     process.env.TRELLO_WORKFLOW_TEMPLATE ?? resolve(targetRepo, "..", "agentic-sdlc", "templates", "trello-board-workflow.yaml"),
   lifecycleSchemaPath:
     process.env.AGENTIC_SDLC_SCHEMA_PATH ?? resolve(targetRepo, "..", "agentic-sdlc", "schemas", "lifecycle-contracts.schema.json"),
-  listNewIdeas: process.env.TRELLO_LIST_NEW_IDEAS ?? "New Ideas",
-  listBacklog: process.env.TRELLO_LIST_BACKLOG ?? "Backlog",
-  listPrioritized: process.env.TRELLO_LIST_PRIORITIZED ?? "Prioritized",
-  listWorking: process.env.TRELLO_LIST_WORKING ?? "Execution",
-  listReview: process.env.TRELLO_LIST_REVIEW ?? "Evaluation",
-  listHumanApproval: process.env.TRELLO_LIST_HUMAN_APPROVAL ?? "Human Approval",
-  listSpecDesign: process.env.TRELLO_LIST_SPEC_DESIGN ?? "Spec & Design",
-  listRelease: process.env.TRELLO_LIST_RELEASE ?? "Release",
-  listProductionObservation: process.env.TRELLO_LIST_PRODUCTION_OBSERVATION ?? "Production Observation",
-  listDone: process.env.TRELLO_LIST_DONE ?? "Done",
   wipLimit: Number(process.env.WIP_LIMIT ?? "1"),
   codingAgentCli: required("CODING_AGENT_CLI"),
   // The Spec & Design Agent runs as a one-shot Docker container on this host.

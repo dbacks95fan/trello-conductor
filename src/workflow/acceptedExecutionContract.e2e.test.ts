@@ -111,7 +111,7 @@ test("loads accepted immutable artifacts and adapts them against the accepted wo
       },
     });
     const yaml = (value: string) => value;
-    const productYaml = yaml(`schema_version: "1.0"\nproduct_id: MF\nproduct_name: MealFlow\ntrello_board_id: board-1\ntarget_repository: ${productUrl}\nauthorized_product_owner_ids:\n  - owner-1\npolicy_profiles:\n  MF-DEFAULT: policy-profiles/default.md\n`);
+    const productYaml = yaml(`schema_version: "1.1"\nproduct_id: MF\nproduct_name: MealFlow\ntrello_board_id: board-1\ntrello_lists:\n  new_ideas: list-new\n  backlog: list-backlog\n  prioritized: list-prioritized\n  spec_design: list-spec\n  execution: list-execution\n  evaluation: list-evaluation\n  human_approval: list-human-approval\n  release: list-release\n  production_observation: list-observation\n  done: list-done\ntarget_repository: ${productUrl}\nauthorized_product_owner_ids:\n  - owner-1\npolicy_profiles:\n  MF-DEFAULT: policy-profiles/default.md\n`);
     const fetchFn: typeof fetch = async (input) => {
       const url = String(input);
       if (url.includes("product.yaml?")) return new Response(productYaml);

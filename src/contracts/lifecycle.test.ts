@@ -23,6 +23,35 @@ test("loads the canonical Draft 2020-12 schema and validates a board transition 
   assert.deepEqual(result, { valid: true, errors: [] });
 });
 
+test("requires ProductConfig 1.1 to include every canonical stage list mapping", () => {
+  const validator = createLifecycleValidator(schemaPath);
+  const lists = {
+    new_ideas: "list-new",
+    backlog: "list-backlog",
+    prioritized: "list-prioritized",
+    spec_design: "list-spec",
+    execution: "list-execution",
+    evaluation: "list-evaluation",
+    human_approval: "list-human-approval",
+    release: "list-release",
+    production_observation: "list-observation",
+    done: "list-done",
+  };
+  const product = {
+    schema_version: "1.1",
+    product_id: "MF",
+    product_name: "MealFlow",
+    trello_board_id: "board-1",
+    trello_lists: lists,
+    target_repository: "https://github.com/example/mealflow",
+    authorized_product_owner_ids: ["owner-1"],
+    policy_profiles: { "MF-DEFAULT": "policy-profiles/default.md" },
+  };
+  assert.equal(validator.validate("ProductConfig", product).valid, true);
+  assert.equal(validator.validate("ProductConfig", { ...product, schema_version: "1.0" }).valid, false);
+  assert.equal(validator.validate("ProductConfig", { ...product, trello_lists: undefined }).valid, false);
+});
+
 test("rejects unsupported Work Contract versions and invalid date formats", () => {
   const validator = createLifecycleValidator(schemaPath);
   const invalidWorkContract = validator.validate("WorkContract", {
