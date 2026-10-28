@@ -88,20 +88,23 @@ engineering-stage handler for that work item:
    content hash, or policy-profile ID/version. It resolves `product.yaml` and
    the selected profile at that same pinned commit and verifies the profile.
 3. It creates the isolated `work/<intent-id>` workspace under
-   `SPEC_WORKSPACE_ROOT` — a **full local clone** of `TARGET_REPO` with the work
-   branch checked out at the current HEAD — writes the frozen bytes to
-   `.agent/work/<intent-id>/intent.md` and `policy-profile.md`, commits them
-   on the work branch, and computes raw-byte fingerprints.
+   `SPEC_WORKSPACE_ROOT` - a **full local clone** of `TARGET_REPO` with the work
+   branch checked out at the current HEAD - and stages byte-exact frozen inputs
+   at `.agent/inputs/<invocation-id>/intent.md` and `policy-profile.md`. These
+   transient snapshots are mounted read-only into the agent. The agent verifies
+   them and commits its authorized copies with `spec.md` and `work-contract.yaml`.
    A clone rather than a `git worktree`: a worktree's `.git` is a link file
    holding an absolute host path, which does not resolve inside a container.
-4. It builds a request per `spec-design-agent/schemas/spec-request.schema.json`
-   (`runId`, `workItem`, `productId`, `intent`, `policyProfile`, `target`,
-   and Prioritized authorization), writes it
+4. It builds a request v2 per `spec-design-agent/schemas/spec-request.schema.json`
+   (`runId`, `invocationId`, `triggerEventId`, work identity, the typed
+   `FreezeActivationEvent`, target, and path permissions), and a canonical
+   StageInvocation 1.1 with the same freeze and invocation IDs. It writes the request
    into the workspace, and runs the agent as a one-shot Docker container with the
    workspace bind-mounted at `/work` (`src/specDesignAgent/runSpecDesignAgent.ts`):
 
    ```
    docker run --rm --mount type=bind,source=<workspace>,target=/work \
+     --mount type=bind,source=<workspace>/.agent/inputs/<invocation-id>,target=/work/.agent/inputs/<invocation-id>,readonly \
      --read-only --tmpfs /tmp -e HOME=/tmp -e SPEC_AGENT_PROVIDER=<provider> \
      -e GIT_CONFIG_COUNT=3 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/work \
      -e GIT_CONFIG_KEY_1=user.email -e GIT_CONFIG_KEY_2=user.name ... \

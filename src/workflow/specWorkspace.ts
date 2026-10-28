@@ -1,9 +1,9 @@
-// ABOUTME: Creates a self-contained work/<intent-id> clone of the target repo and freezes intent.md into it.
+// ABOUTME: Creates a self-contained work/<intent-id> clone and stages invocation-scoped frozen input snapshots.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 const execFileAsync = promisify(execFile);
@@ -18,6 +18,7 @@ export interface PrepareSpecWorkspaceInput {
   targetRepo: string;
   workspaceRoot: string;
   intentId: string;
+  invocationId: string;
   frozenIntentBytes: Buffer;
   frozenPolicyProfileBytes: Buffer;
 }
@@ -70,31 +71,18 @@ export async function prepareSpecWorkspace(input: PrepareSpecWorkspaceInput): Pr
   const hasRemote = (await git(["remote"], path)).length > 0;
   await git(hasRemote ? ["remote", "set-url", "origin", remoteUrl] : ["remote", "add", "origin", remoteUrl], path);
 
-  const relativeIntentPath = join(".agent", "work", input.intentId, "intent.md");
-  const relativePolicyProfilePath = join(".agent", "work", input.intentId, "policy-profile.md");
-  await mkdir(join(path, ".agent", "work", input.intentId), { recursive: true });
-  await writeFile(join(path, relativeIntentPath), input.frozenIntentBytes);
-  await writeFile(join(path, relativePolicyProfilePath), input.frozenPolicyProfileBytes);
-
-  // Plain add, never --force: a product repository must track `.agent/work/` so
-  // agent-owned artifacts are ordinary versioned content. If this fails because
-  // the path is ignored, the repository's .gitignore is wrong and should say so
-  // loudly rather than be overridden here.
-  await git(["add", "--", relativeIntentPath, relativePolicyProfilePath], path);
-  if ((await git(["diff", "--cached", "--name-only"], path)).length > 0) {
-    await git(
-      [
-        "-c",
-        "user.email=conductor@agentic-sdlc.local",
-        "-c",
-        "user.name=Trello Conductor",
-        "commit",
-        "-m",
-        `chore(agent): freeze intent for ${input.intentId}`,
-      ],
-      path,
-    );
+  const inputDirectory = join(path, ".agent", "inputs", input.invocationId);
+  await mkdir(inputDirectory, { recursive: true });
+  const intentPath = join(inputDirectory, "intent.md");
+  const policyProfilePath = join(inputDirectory, "policy-profile.md");
+  if (existsSync(intentPath) && !(await readFile(intentPath)).equals(input.frozenIntentBytes)) {
+    throw new Error("The invocation already has a different frozen intent snapshot.");
   }
+  if (existsSync(policyProfilePath) && !(await readFile(policyProfilePath)).equals(input.frozenPolicyProfileBytes)) {
+    throw new Error("The invocation already has a different frozen policy-profile snapshot.");
+  }
+  await writeFile(intentPath, input.frozenIntentBytes);
+  await writeFile(policyProfilePath, input.frozenPolicyProfileBytes);
 
   const frozenArtifactSha256 = createHash("sha256").update(input.frozenIntentBytes).digest("hex");
   return { path, branch, baseCommit, frozenArtifactSha256, remoteUrl, created };
