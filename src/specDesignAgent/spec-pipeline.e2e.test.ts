@@ -101,28 +101,46 @@ async function runPipeline(targetRepo: string, workspaceRoot: string) {
     targetRepo,
     workspaceRoot,
     intentId: resolved.intentId,
+    invocationId: "e2e-invocation-1",
     frozenIntentBytes: resolved.frozenIntentBytes,
     frozenPolicyProfileBytes: resolved.frozenPolicyProfileBytes,
   });
 
   const request: SpecDesignRequest = {
+    requestVersion: 2,
     runId: "e2e-run-1",
+    invocationId: "e2e-invocation-1",
+    triggerEventId: "board-event-1",
+    stage: "spec_design",
     workItem: resolved.intentId,
     productId: resolved.productId,
-    intent: {
-      repository: resolved.intentRepository,
-      commit: resolved.intentCommit,
-      path: resolved.intentPath,
-      frozenArtifactSha256: workspace.frozenArtifactSha256,
-      contentSha256: resolved.intentContentSha256,
-    },
-    policyProfile: {
-      repository: resolved.intentRepository,
-      commit: resolved.intentCommit,
-      path: resolved.policyProfilePath,
-      profileId: resolved.policyProfileId,
-      version: resolved.policyProfileVersion,
-      frozenArtifactSha256: resolved.policyProfileContentSha256,
+    intentContentSha256: resolved.intentContentSha256,
+    freezeActivation: {
+      schema_version: "1.0",
+      event_id: "freeze-event-1",
+      event_type: "activated",
+      work_item: {
+        product_id: resolved.productId,
+        intent_id: resolved.intentId,
+        intent_version: resolved.intentVersion,
+        trello_card_id: "card-long-id",
+      },
+      intent: {
+        repository: `https://github.com/${resolved.intentRepository}`,
+        commit_sha: resolved.intentCommit,
+        path: resolved.intentPath,
+        sha256: workspace.frozenArtifactSha256,
+      },
+      policy_profile_id: resolved.policyProfileId,
+      policy_profile_version: resolved.policyProfileVersion,
+      policy_profile: {
+        repository: `https://github.com/${resolved.intentRepository}`,
+        commit_sha: resolved.intentCommit,
+        path: resolved.policyProfilePath,
+        sha256: resolved.policyProfileContentSha256,
+      },
+      authorized_by: resolved.approvedBy,
+      recorded_at: resolved.approvedAt,
     },
     target: {
       repository: targetRepo,
@@ -130,7 +148,8 @@ async function runPipeline(targetRepo: string, workspaceRoot: string) {
       branch: workspace.branch,
       workspace: CONTAINER_WORKSPACE,
     },
-    approval: { prioritized: true, approvedBy: resolved.approvedBy, approvedAt: resolved.approvedAt },
+    readPaths: ["."],
+    writePaths: [`.agent/work/${resolved.intentId}`],
   };
 
   const run = await runSpecDesignAgent(request, {
@@ -160,7 +179,7 @@ test("card -> frozen intent/profile -> clone -> container -> human review", asyn
     assert.ok(existsSync(join(workspace.path, ".agent", "work", "INT-MF-0042", "spec.md")));
     const log = execFileSync("git", ["log", "--oneline"], { cwd: workspace.path }).toString().trim().split("\n");
     assert.match(log[0], /spec: INT-MF-0042/);
-    assert.match(log[1], /freeze intent for INT-MF-0042/);
+    assert.match(log[1], /initial/);
     assert.equal(
       execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: workspace.path }).toString().trim(),
       "work/INT-MF-0042",

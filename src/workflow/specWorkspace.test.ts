@@ -1,4 +1,4 @@
-// ABOUTME: Tests that the Spec & Design workspace is a self-contained clone with the frozen intent committed.
+// ABOUTME: Tests that the Spec & Design workspace stages exact frozen inputs per invocation.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
@@ -29,14 +29,15 @@ function initRepo(originUrl: string | null = REMOTE_URL): string {
   return dir;
 }
 
-test("prepareSpecWorkspace clones work/<id>, freezes intent.md, and is idempotent", async () => {
+test("prepareSpecWorkspace clones work/<id>, stages exact snapshots by invocation, and is idempotent", async () => {
   const targetRepo = initRepo();
   const workspaceRoot = mkdtempSync(join(tmpdir(), "spec-workspace-roots-"));
   const frozenIntentBytes = Buffer.from("---\nintent_id: INT-MF-0042\nstatus: Frozen\n---\n\n# Intent\n");
   const intentId = "INT-MF-0042";
 
   try {
-    const first = await prepareSpecWorkspace({ targetRepo, workspaceRoot, intentId, frozenIntentBytes, frozenPolicyProfileBytes: FROZEN_PROFILE });
+    const invocationId = "invocation-1";
+    const first = await prepareSpecWorkspace({ targetRepo, workspaceRoot, intentId, invocationId, frozenIntentBytes, frozenPolicyProfileBytes: FROZEN_PROFILE });
 
     assert.equal(first.created, true);
     assert.equal(first.branch, "work/INT-MF-0042");
@@ -46,10 +47,10 @@ test("prepareSpecWorkspace clones work/<id>, freezes intent.md, and is idempoten
     // A container needs a real .git directory, not a worktree link file.
     assert.ok(statSync(join(first.path, ".git")).isDirectory(), ".git must be a directory so git works inside the container");
 
-    const intentFile = join(first.path, ".agent", "work", intentId, "intent.md");
+    const intentFile = join(first.path, ".agent", "inputs", invocationId, "intent.md");
     assert.ok(existsSync(intentFile));
     assert.deepEqual(readFileSync(intentFile), frozenIntentBytes);
-    assert.deepEqual(readFileSync(join(first.path, ".agent", "work", intentId, "policy-profile.md")), FROZEN_PROFILE);
+    assert.deepEqual(readFileSync(join(first.path, ".agent", "inputs", invocationId, "policy-profile.md")), FROZEN_PROFILE);
 
     const git = (...args: string[]) => execFileSync("git", args, { cwd: first.path }).toString().trim();
     assert.equal(git("rev-parse", "--abbrev-ref", "HEAD"), "work/INT-MF-0042");
@@ -62,16 +63,15 @@ test("prepareSpecWorkspace clones work/<id>, freezes intent.md, and is idempoten
     assert.equal(first.remoteUrl, REMOTE_URL);
 
     const log = git("log", "--oneline").split("\n");
-    assert.equal(log.length, 2);
-    assert.match(log[0], /freeze intent for INT-MF-0042/);
+    assert.equal(log.length, 1, "the Conductor stages invocation inputs without creating a product artifact commit");
 
-    const second = await prepareSpecWorkspace({ targetRepo, workspaceRoot, intentId, frozenIntentBytes, frozenPolicyProfileBytes: FROZEN_PROFILE });
+    const second = await prepareSpecWorkspace({ targetRepo, workspaceRoot, intentId, invocationId, frozenIntentBytes, frozenPolicyProfileBytes: FROZEN_PROFILE });
     assert.equal(second.created, false);
     assert.equal(second.path, first.path);
     assert.equal(
       execFileSync("git", ["log", "--oneline"], { cwd: first.path }).toString().trim().split("\n").length,
-      2,
-      "re-entering Spec & Design must not add another freeze commit",
+      1,
+      "re-entering the same invocation must not add a workspace setup commit",
     );
   } finally {
     rmSync(targetRepo, { recursive: true, force: true });
@@ -79,22 +79,24 @@ test("prepareSpecWorkspace clones work/<id>, freezes intent.md, and is idempoten
   }
 });
 
-test("prepareSpecWorkspace fails loudly when the repo ignores .agent/work/", async () => {
+test("prepareSpecWorkspace stages invocation inputs when the repo ignores .agent/", async () => {
   const targetRepo = initRepo();
-  // A non-compliant product repo: the artifact home is ignored. We never work
-  // around this with --force; the repository's .gitignore is the thing to fix.
+  // Invocation inputs are transient and can be staged even when .agent/ is ignored.
   writeFileSync(join(targetRepo, ".gitignore"), ".agent/\n");
   execFileSync("git", ["commit", "-qam", "ignore .agent"], { cwd: targetRepo, stdio: "pipe" });
   const workspaceRoot = mkdtempSync(join(tmpdir(), "spec-workspace-roots-"));
   try {
-    await assert.rejects(
-      prepareSpecWorkspace({
+    const workspace = await prepareSpecWorkspace({
         targetRepo,
         workspaceRoot,
         intentId: "INT-MF-0042",
+        invocationId: "invocation-ignored-agent-dir",
         frozenIntentBytes: Buffer.from("---\nintent_id: INT-MF-0042\n---\n"),
         frozenPolicyProfileBytes: FROZEN_PROFILE,
-      }),
+      });
+    assert.deepEqual(
+      readFileSync(join(workspace.path, ".agent", "inputs", "invocation-ignored-agent-dir", "intent.md")),
+      Buffer.from("---\nintent_id: INT-MF-0042\n---\n"),
     );
   } finally {
     rmSync(targetRepo, { recursive: true, force: true });
@@ -111,6 +113,7 @@ test("prepareSpecWorkspace refuses a target repo without an HTTPS remote", async
         targetRepo,
         workspaceRoot,
         intentId: "INT-MF-0042",
+        invocationId: "invocation-no-remote",
         frozenIntentBytes: Buffer.from("x"),
         frozenPolicyProfileBytes: FROZEN_PROFILE,
       }),

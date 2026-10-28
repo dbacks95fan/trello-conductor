@@ -41,25 +41,38 @@ if (mode === "garbage") {
   process.exit(30);
 }
 
-// The real agent verifies the frozen intent bytes before doing anything.
-const intent = fs.readFileSync(path.join(source, ".agent", "work", request.workItem, "intent.md"));
+// The real agent verifies the invocation snapshots before copying them to its work directory.
+const inputDirectory = path.join(source, ".agent", "inputs", request.invocationId);
+const intent = fs.readFileSync(path.join(inputDirectory, "intent.md"));
+const policyProfile = fs.readFileSync(path.join(inputDirectory, "policy-profile.md"));
 const sha = crypto.createHash("sha256").update(intent).digest("hex");
+const profileSha = crypto.createHash("sha256").update(policyProfile).digest("hex");
+const freeze = request.freezeActivation;
 const base = {
   runId: request.runId,
+  invocationId: request.invocationId,
+  triggerEventId: request.triggerEventId,
+  stage: request.stage,
   workItem: request.workItem,
+  productId: request.productId,
+  intentVersion: freeze.work_item.intent_version,
+  trelloCardId: freeze.work_item.trello_card_id,
   status: "blocked",
   summary: "",
   branch: request.target.branch,
   workspace: request.target.workspace,
-  intentCommit: request.intent.commit,
-  frozenArtifactSha256: request.intent.frozenArtifactSha256,
-  intentContentSha256: request.intent.contentSha256,
+  intentCommit: freeze.intent.commit_sha,
+  frozenArtifactSha256: freeze.intent.sha256,
+  policyProfileId: freeze.policy_profile_id,
+  policyProfileVersion: freeze.policy_profile_version,
+  policyProfileSha256: freeze.policy_profile.sha256,
+  intentContentSha256: request.intentContentSha256,
   blockingConcerns: [],
   nonBlockingConcerns: [],
   humanDecisions: [],
 };
 
-if (sha !== request.intent.frozenArtifactSha256) {
+if (sha !== freeze.intent.sha256 || profileSha !== freeze.policy_profile.sha256) {
   process.stdout.write(JSON.stringify({ ...base, summary: "INTENT_MUTATED", blockingConcerns: ["INTENT_MUTATED"] }));
   process.exit(20);
 }
@@ -84,14 +97,19 @@ if (mode === "needs_decision") {
 }
 
 const specRelPath = path.posix.join(".agent", "work", request.workItem, "spec.md");
+const workContractRelPath = path.posix.join(".agent", "work", request.workItem, "work-contract.yaml");
+fs.mkdirSync(path.dirname(path.join(source, specRelPath)), { recursive: true });
+fs.writeFileSync(path.join(source, ".agent", "work", request.workItem, "intent.md"), intent);
+fs.writeFileSync(path.join(source, ".agent", "work", request.workItem, "policy-profile.md"), policyProfile);
 fs.writeFileSync(
   path.join(source, specRelPath),
   "# Requirements and Design Specification\n\n## Traceability to frozen intent\n",
 );
+fs.writeFileSync(path.join(source, workContractRelPath), "schema_version: 3\n");
 const git = (args) =>
   cp.execFileSync("git", ["-c", "user.email=a@b.c", "-c", "user.name=Spec Agent", ...args], { cwd: source }).toString().trim();
-// Plain add, matching the real agent: `.agent/work/` must be tracked content.
-git(["add", "--", specRelPath]);
+// Force-add only authorized outputs, matching the real agent's artifact contract.
+git(["add", "--force", "--", ".agent/work/" + request.workItem + "/intent.md", ".agent/work/" + request.workItem + "/policy-profile.md", specRelPath, workContractRelPath]);
 git(["commit", "-m", `spec: ${request.workItem}`]);
 const specCommit = git(["rev-parse", "HEAD"]);
 
@@ -102,6 +120,9 @@ process.stdout.write(
     summary: "Specification produced from the frozen intent.",
     specCommit,
     specPath: specRelPath,
+    specSha256: crypto.createHash("sha256").update(fs.readFileSync(path.join(source, specRelPath))).digest("hex"),
     specVersion: 1,
+    workContractPath: workContractRelPath,
+    workContractSha256: crypto.createHash("sha256").update(fs.readFileSync(path.join(source, workContractRelPath))).digest("hex"),
   }),
 );

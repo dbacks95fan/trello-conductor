@@ -276,6 +276,11 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
     return;
   }
 
+  if (!approval.eventId || !activeFreeze.tuple.freezeEventId) {
+    await commentOnCard(cardId, "Spec & Design was not started: the triggering transition or active freeze is missing its event ID.");
+    return;
+  }
+
   let resolved;
   try {
     resolved = await resolveSpecRequest(card, {
@@ -310,12 +315,48 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
     await commentOnCard(cardId, `⚠️ ${warning}`);
   }
 
+  const invocationId = randomUUID();
+  const runId = randomUUID();
+  const freezeActivation = {
+    schema_version: "1.0" as const,
+    event_id: activeFreeze.tuple.freezeEventId,
+    event_type: "activated" as const,
+    work_item: {
+      product_id: activeFreeze.tuple.productId,
+      intent_id: activeFreeze.tuple.intentId,
+      intent_version: activeFreeze.tuple.intentVersion,
+      trello_card_id: activeFreeze.tuple.cardId,
+    },
+    intent: {
+      repository: `https://github.com/${resolved.intentRepository}`,
+      commit_sha: activeFreeze.tuple.intentCommit,
+      path: resolved.intentPath,
+      sha256: activeFreeze.tuple.intentSha256,
+    },
+    policy_profile_id: activeFreeze.tuple.policyProfileId,
+    policy_profile_version: activeFreeze.tuple.policyProfileVersion,
+    policy_profile: {
+      repository: `https://github.com/${resolved.intentRepository}`,
+      commit_sha: activeFreeze.tuple.policyProfileCommit,
+      path: resolved.policyProfilePath,
+      sha256: activeFreeze.tuple.policyProfileSha256,
+    },
+    authorized_by: activeFreeze.tuple.authorizedBy,
+    recorded_at: activeFreeze.tuple.frozenAt,
+  };
+  const freezeValidation = lifecycleValidator.validate("FreezeActivationEvent", freezeActivation);
+  if (!freezeValidation.valid) {
+    await commentOnCard(cardId, `Spec & Design was not started: active freeze record is invalid: ${freezeValidation.errors.join("; ")}`);
+    return;
+  }
+
   let workspace;
   try {
     workspace = await prepareSpecWorkspace({
       targetRepo: config.targetRepo,
       workspaceRoot: config.specWorkspaceRoot,
       intentId: resolved.intentId,
+      invocationId,
       frozenIntentBytes: resolved.frozenIntentBytes,
       frozenPolicyProfileBytes: resolved.frozenPolicyProfileBytes,
     });
@@ -328,24 +369,15 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
   }
 
   const request: SpecDesignRequest = {
-    runId: randomUUID(),
+    requestVersion: 2,
+    runId,
+    invocationId,
+    triggerEventId: approval.eventId,
+    stage: "spec_design",
     workItem: resolved.intentId,
     productId: resolved.productId,
-    intent: {
-      repository: resolved.intentRepository,
-      commit: resolved.intentCommit,
-      path: resolved.intentPath,
-      frozenArtifactSha256: workspace.frozenArtifactSha256,
-      contentSha256: resolved.intentContentSha256,
-    },
-    policyProfile: {
-      repository: resolved.intentRepository,
-      commit: resolved.intentCommit,
-      path: resolved.policyProfilePath,
-      profileId: resolved.policyProfileId,
-      version: resolved.policyProfileVersion,
-      frozenArtifactSha256: resolved.policyProfileContentSha256,
-    },
+    intentContentSha256: resolved.intentContentSha256,
+    freezeActivation,
     target: {
       repository: config.targetRepo,
       baseCommit: workspace.baseCommit,
@@ -354,27 +386,22 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
       // bind-mounted at /work.
       workspace: CONTAINER_WORKSPACE,
     },
-    approval: {
-      prioritized: true,
-      approvedBy: resolved.approvedBy,
-      approvedAt: resolved.approvedAt,
-    },
+    readPaths: ["."],
+    writePaths: [`.agent/work/${resolved.intentId}`],
   };
 
   const stageInvocation = {
-    schema_version: "1.0",
-    invocation_id: request.runId,
-    trigger_event_id: approval.eventId ?? request.runId,
+    schema_version: "1.1",
+    invocation_id: request.invocationId,
+    trigger_event_id: request.triggerEventId,
     stage: "spec_design",
-    work_item: { product_id: resolved.productId, intent_id: resolved.intentId, intent_version: resolved.intentVersion, trello_card_id: cardId },
-    input_artifacts: [
-      { repository: `https://github.com/${resolved.intentRepository}`, commit_sha: resolved.intentCommit, path: resolved.intentPath, sha256: resolved.intentContentSha256 },
-      { repository: `https://github.com/${resolved.intentRepository}`, commit_sha: resolved.intentCommit, path: resolved.policyProfilePath, sha256: resolved.policyProfileContentSha256 },
-    ],
+    work_item: freezeActivation.work_item,
+    freeze_activation: freezeActivation,
+    input_artifacts: [],
     target: { repository: workspace.remoteUrl.replace(/\.git$/, ""), commit_sha: workspace.baseCommit },
     workspace_ref: workspace.branch,
-    read_paths: ["."],
-    write_paths: [`.agent/work/${resolved.intentId}/spec.md`, `.agent/work/${resolved.intentId}/work-contract.yaml`],
+    read_paths: request.readPaths,
+    write_paths: request.writePaths,
   };
   const invocationValidation = lifecycleValidator.validate("StageInvocation", stageInvocation);
   if (!invocationValidation.valid) {
@@ -386,7 +413,7 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
   const recordStageResult = async (status: "spec_ready" | "needs_decision" | "blocked" | "failed", outputArtifacts: unknown[], summary: string, findings?: string[]) => {
     const stageResult = {
       schema_version: "1.0",
-      invocation_id: request.runId,
+      invocation_id: request.invocationId,
       stage: "spec_design",
       work_item: stageInvocation.work_item,
       status,

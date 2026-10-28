@@ -7,23 +7,30 @@ import { config } from "../config.js";
 /** The bounded request the Spec & Design Agent consumes.
  *  Shape mirrors spec-design-agent/schemas/spec-request.schema.json. */
 export interface SpecDesignRequest {
+  requestVersion: 2;
   runId: string;
+  invocationId: string;
+  triggerEventId: string;
+  stage: "spec_design";
   workItem: string;
   productId: string;
-  intent: {
-    repository: string;
-    commit: string;
-    path: string;
-    frozenArtifactSha256: string;
-    contentSha256: string;
-  };
-  policyProfile: {
-    repository: string;
-    commit: string;
-    path: string;
-    profileId: string;
-    version: string;
-    frozenArtifactSha256: string;
+  intentContentSha256?: string;
+  freezeActivation: {
+    schema_version: "1.0";
+    event_id: string;
+    event_type: "activated";
+    work_item: {
+      product_id: string;
+      intent_id: string;
+      intent_version: number;
+      trello_card_id: string;
+    };
+    intent: { repository: string; commit_sha: string; path: string; sha256: string };
+    policy_profile_id: string;
+    policy_profile_version: string;
+    policy_profile: { repository: string; commit_sha: string; path: string; sha256: string };
+    authorized_by: string;
+    recorded_at: string;
   };
   target: {
     repository: string;
@@ -31,11 +38,8 @@ export interface SpecDesignRequest {
     branch: string;
     workspace: string;
   };
-  approval: {
-    prioritized: boolean;
-    approvedBy: string;
-    approvedAt: string;
-  };
+  readPaths: string[];
+  writePaths: string[];
 }
 
 export interface SpecDesignResult {
@@ -56,6 +60,8 @@ export interface DockerRunSpec {
   docker: string[];
   image: string;
   hostWorkspace: string;
+  inputSnapshotPath?: string;
+  invocationId?: string;
   provider: string;
   envFile?: string | null;
   containerName?: string;
@@ -114,6 +120,12 @@ export function buildDockerArgs(spec: DockerRunSpec): string[] {
     "--cap-drop",
     "ALL",
   ];
+  if (spec.inputSnapshotPath && spec.invocationId) {
+    args.push(
+      "--mount",
+      `type=bind,source=${spec.inputSnapshotPath},target=${CONTAINER_WORKSPACE}/.agent/inputs/${spec.invocationId},readonly`,
+    );
+  }
   if (spec.envFile) args.push("--env-file", spec.envFile);
   if (spec.containerName) args.push("--name", spec.containerName);
   args.push(spec.image);
@@ -170,6 +182,8 @@ export async function runSpecDesignAgent(
     docker,
     image,
     hostWorkspace: options.hostWorkspace,
+    inputSnapshotPath: join(options.hostWorkspace, ".agent", "inputs", request.invocationId),
+    invocationId: request.invocationId,
     provider,
     envFile,
     containerName: `spec-design-${request.runId}`,

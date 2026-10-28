@@ -8,6 +8,8 @@ test("buildDockerArgs bind-mounts the workspace and mirrors the compose hardenin
     docker: ["docker"],
     image: "spec-design-agent:local",
     hostWorkspace: "C:\\Repos\\agentic-sdlc-workspaces\\INT-MF-0042",
+    inputSnapshotPath: "C:\\Repos\\agentic-sdlc-workspaces\\INT-MF-0042\\.agent\\inputs\\invoke-1",
+    invocationId: "invoke-1",
     provider: "claude",
     envFile: "C:\\Repos\\spec-design-agent\\.runtime.env",
     containerName: "spec-design-run-1",
@@ -19,6 +21,11 @@ test("buildDockerArgs bind-mounts the workspace and mirrors the compose hardenin
   assert.equal(
     args[args.indexOf("--mount") + 1],
     `type=bind,source=C:\\Repos\\agentic-sdlc-workspaces\\INT-MF-0042,target=${CONTAINER_WORKSPACE}`,
+  );
+  const inputMountIndex = args.indexOf("--mount", args.indexOf("--mount") + 1);
+  assert.equal(
+    args[inputMountIndex + 1],
+    "type=bind,source=C:\\Repos\\agentic-sdlc-workspaces\\INT-MF-0042\\.agent\\inputs\\invoke-1,target=/work/.agent/inputs/invoke-1,readonly",
   );
   assert.ok(args.includes("--read-only"));
   assert.equal(args[args.indexOf("--tmpfs") + 1], "/tmp");

@@ -13,6 +13,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const FAKE_DOCKER = join(here, "__fixtures__", "fake-docker.cjs");
 
 const FROZEN_INTENT = Buffer.from("---\nintent_id: INT-MF-0042\nstatus: Frozen\n---\n\n# Intent\n");
+const FROZEN_PROFILE = Buffer.from("Profile ID: MF-DEFAULT\nVersion: 1\n");
+const INVOCATION_ID = "invoke-integration-1";
 
 function workspaceWithIntent(): { dir: string; sha: string } {
   const dir = mkdtempSync(join(tmpdir(), "spec-container-ws-"));
@@ -23,33 +25,47 @@ function workspaceWithIntent(): { dir: string; sha: string } {
   writeFileSync(join(dir, "app.js"), "// product code\n");
   git("add", "-A");
   git("commit", "-m", "initial");
-  mkdirSync(join(dir, ".agent", "work", "INT-MF-0042"), { recursive: true });
-  writeFileSync(join(dir, ".agent", "work", "INT-MF-0042", "intent.md"), FROZEN_INTENT);
+  mkdirSync(join(dir, ".agent", "inputs", INVOCATION_ID), { recursive: true });
+  writeFileSync(join(dir, ".agent", "inputs", INVOCATION_ID, "intent.md"), FROZEN_INTENT);
+  writeFileSync(join(dir, ".agent", "inputs", INVOCATION_ID, "policy-profile.md"), FROZEN_PROFILE);
   return { dir, sha: createHash("sha256").update(FROZEN_INTENT).digest("hex") };
 }
 
 function request(workspaceSha: string): SpecDesignRequest {
   return {
+    requestVersion: 2,
     runId: "run-integration-1",
+    invocationId: INVOCATION_ID,
+    triggerEventId: "event-integration-1",
+    stage: "spec_design",
     workItem: "INT-MF-0042",
     productId: "MF",
-    intent: {
-      repository: "dbacks95fan/intent-backlog",
-      commit: "a".repeat(40),
-      path: "products/mealflow/intents/INT-MF-0042/intent.md",
-      frozenArtifactSha256: workspaceSha,
-      contentSha256: "c".repeat(64),
-    },
-    policyProfile: {
-      repository: "dbacks95fan/intent-backlog",
-      commit: "a".repeat(40),
-      path: "products/mealflow/policy-profiles/default.md",
-      profileId: "MF-DEFAULT",
-      version: "1",
-      frozenArtifactSha256: "e".repeat(64),
+    intentContentSha256: "c".repeat(64),
+    freezeActivation: {
+      schema_version: "1.0",
+      event_id: "freeze-integration-1",
+      event_type: "activated",
+      work_item: { product_id: "MF", intent_id: "INT-MF-0042", intent_version: 5, trello_card_id: "card-123" },
+      intent: {
+        repository: "https://github.com/dbacks95fan/intent-backlog",
+        commit_sha: "a".repeat(40),
+        path: "products/mealflow/intents/INT-MF-0042/intent.md",
+        sha256: workspaceSha,
+      },
+      policy_profile_id: "MF-DEFAULT",
+      policy_profile_version: "1",
+      policy_profile: {
+        repository: "https://github.com/dbacks95fan/intent-backlog",
+        commit_sha: "a".repeat(40),
+        path: "products/mealflow/policy-profiles/default.md",
+        sha256: createHash("sha256").update(FROZEN_PROFILE).digest("hex"),
+      },
+      authorized_by: "Sobe",
+      recorded_at: "2026-09-06T09:00:00.000Z",
     },
     target: { repository: "C:/Repos/menuapp", baseCommit: "d".repeat(40), branch: "work/INT-MF-0042", workspace: "/work" },
-    approval: { prioritized: true, approvedBy: "Sobe", approvedAt: "2026-09-06T09:00:00.000Z" },
+    readPaths: ["."],
+    writePaths: [".agent/work/INT-MF-0042"],
   };
 }
 
