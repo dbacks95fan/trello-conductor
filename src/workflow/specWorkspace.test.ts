@@ -63,7 +63,7 @@ test("prepareSpecWorkspace clones work/<id>, stages exact snapshots by invocatio
     assert.equal(first.remoteUrl, REMOTE_URL);
 
     const log = git("log", "--oneline").split("\n");
-    assert.equal(log.length, 1, "the Conductor stages invocation inputs without creating a product artifact commit");
+    assert.equal(log.length, 1, "the Orchestrator stages invocation inputs without creating a product artifact commit");
 
     const second = await prepareSpecWorkspace({ targetRepo, workspaceRoot, intentId, invocationId, frozenIntentBytes, frozenPolicyProfileBytes: FROZEN_PROFILE });
     assert.equal(second.created, false);

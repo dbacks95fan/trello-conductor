@@ -1,4 +1,4 @@
-# Trello Conductor
+# Trello Orchestrator
 
 Webhook-driven control-plane service for the Agentic SDLC. It validates Trello
 webhook signatures, interprets authorized list transitions, verifies frozen
@@ -6,16 +6,16 @@ work inputs, invokes assigned agents, and records visible workflow evidence.
 The canonical process is documented in
 [`agentic-sdlc/docs/WORKFLOW.md`](https://github.com/dbacks95fan/agentic-sdlc/blob/main/docs/WORKFLOW.md).
 
-The Conductor has no product-specific board or list IDs. Each product's
+The Orchestrator has no product-specific board or list IDs. Each product's
 `ProductConfig` 1.1 supplies the Trello board ID and the list ID for each of the
 ten canonical stages. Existing boards can use different list names because
 stage routing uses configured IDs, not visual order or name matching. The
-Intent Creation Skill creates the initial card in New Ideas; the Conductor owns
+Intent Creation Skill creates the initial card in New Ideas; the Orchestrator owns
 subsequent workflow state and freeze metadata. Each running instance currently
 subscribes to the single board selected by `TRELLO_BOARD_ID`; it can be set up
 for any product board, but simultaneous multi-board processing is not supported.
 
-| Authorized transition | Conductor action |
+| Authorized transition | Orchestrator action |
 | --- | --- |
 | Backlog → Prioritized | Validate the pinned intent/profile and product-owner ID; record schema-valid freeze activation data and the current projection. |
 | Prioritized → Spec & Design | Verify the active freeze, record a StageInvocation, and invoke Spec & Design. Only a schema-valid Work Contract v3 bound to frozen inputs can be reported ready for human review. |
@@ -30,12 +30,12 @@ blocks out-of-order moves, validates owner identity, and deduplicates event IDs.
 Later human records are not enforced yet; see
 [`docs/HUMAN_RECORDS.md`](docs/HUMAN_RECORDS.md).
 
-Trello Conductor — not Claude — owns all Trello reads and writes. It calls the
+Trello Orchestrator — not Claude — owns all Trello reads and writes. It calls the
 Trello REST API directly with a key/token/secret; the Coding Agent it invokes
 has no Trello access at all.
 
 The evaluator runs remotely on the NAS. When a candidate is complete, Trello
-Conductor verifies the candidate branch is clean, commits the Work Contract and
+Orchestrator verifies the candidate branch is clean, commits the Work Contract and
 evidence to that branch, pushes it, and records the immutable commit SHA in the
 card handoff comment. When the card enters Evaluation, the Evaluator checks
 out that SHA into temporary container storage, evaluates it, and removes the
@@ -80,7 +80,7 @@ engineering-stage handler for that work item:
 1. It reads the intent projection the Intent Creation Skill writes onto the card
    description — `Product` (or `Product ID`), `Intent ID`, `Intent Version`,
    `Intent Commit`, `Intent Hash`, `Canonical intent`, `Policy Profile ID`,
-   and `Policy Profile Version` (`src/workflow/specRequestFromCard.ts`). An Active Conductor
+   and `Policy Profile Version` (`src/workflow/specRequestFromCard.ts`). An Active Orchestrator
    freeze must be present before the agent can start.
 2. It fetches the exact `intent.md` bytes from the `intent-backlog` repository at
    the pinned `Intent Commit` through the GitHub contents API, and refuses to
@@ -135,10 +135,10 @@ engineering-stage handler for that work item:
    `needs_decision` → leave the card in Spec & Design with itemised decisions;
    `blocked` / `failed` / unparseable → leave the card in place with a
    comment. Human review remains in this column; the orchestrator never approves it.
-6. On `spec_ready` the **Conductor** pushes the work branch and comments its URL,
+6. On `spec_ready` the **Orchestrator** pushes the work branch and comments its URL,
    so a human Design Reviewer has something to open. The agent does not push:
    `AGENT_ROLES.md` grants it no write authority over the product repository, and
-   the evaluator handoff already establishes the Conductor as the component that
+   the evaluator handoff already establishes the Orchestrator as the component that
    publishes a branch. A failed push is reported on the card; the spec is still
    committed locally on the work branch.
 
@@ -149,11 +149,11 @@ records a schema-valid StageInvocation and StageResult. A generated spec is
 not an approval; human review remains within Spec & Design.
 
 **Current integration boundary:** the real Spec & Design Agent does not yet
-return a committed Work Contract v3 reference. This Conductor therefore blocks
+return a committed Work Contract v3 reference. This Orchestrator therefore blocks
 `spec_ready` and does not publish that result for Design Review until the
 contract exists and passes canonical validation. Local contract-valid test
-doubles exercise the intended Conductor boundary; they do not prove the
-separate agent integration. After a valid acceptance, the Conductor adapts v3
+doubles exercise the intended Orchestrator boundary; they do not prove the
+separate agent integration. After a valid acceptance, the Orchestrator adapts v3
 to the Coding Agent's v2 input on the accepted work branch. It blocks any
 validation gate or command that the Coding Agent cannot run exactly. Later
 Human Approval, Release, Production Observation, and Done records remain
@@ -167,31 +167,31 @@ manual and are not enforced by this build.
    against the raw request body — deliveries that don't verify are rejected
    with 401 and never reach the workflow logic.
 3. `src/trello/webhookEvent.ts` converts only list moves into canonical events
-   using Trello board, card, list, actor, and event IDs. The Conductor verifies
+   using Trello board, card, list, actor, and event IDs. The Orchestrator verifies
    current card state, allowed order, owner identity, and event deduplication.
 4. The Prioritized transition records the freeze. Entering Spec & Design records
    a schema-valid StageInvocation and invokes the Spec & Design Agent. Its
    schema-valid StageResult must include committed `spec.md` and Work Contract v3
-   references, or the Conductor blocks the handoff.
+   references, or the Orchestrator blocks the handoff.
 5. Moving to Execution requires a product-owner SpecAcceptanceRecord. The
-   Conductor checks its schema, authorization, work identity, immutable artifact
+   Orchestrator checks its schema, authorization, work identity, immutable artifact
    hashes, StageResult references, Work Contract v3 fields, and target revision.
-6. The Conductor creates the Coding Agent's v2 contract from the accepted v3
+6. The Orchestrator creates the Coding Agent's v2 contract from the accepted v3
    contract and spec. It accepts only validation names and commands that map
    exactly to the Coding Agent's fixed deterministic gates, then runs it on a
    worktree based on the accepted Spec & Design branch.
-7. For a `candidate_complete` result, Trello Conductor records the Work Contract
+7. For a `candidate_complete` result, Trello Orchestrator records the Work Contract
    and Evidence Package in the candidate branch, pushes the branch, and writes
    the repository URL, commit SHA, and repository-relative artifact paths to
    the evaluator handoff comment.
-8. When the card enters the configured `Evaluation` list ID, Trello Conductor calls the
+8. When the card enters the configured `Evaluation` list ID, Trello Orchestrator calls the
    authenticated `EVALUATOR_API_URL` endpoint. The evaluator validates the
    allowed repository URL, checks out the supplied SHA into request-scoped
    temporary storage, and returns its JSON result.
 9. A non-candidate Coding Agent result leaves the card in Execution. Only a
    candidate is sent to Evaluation. A passing Evaluation can move the card to
    Human Approval; later human records and Release/Observation/Done transitions
-   are not yet enforced. The Conductor never moves a card to Done.
+   are not yet enforced. The Orchestrator never moves a card to Done.
 
 ## Setup
 
@@ -250,7 +250,7 @@ individual lists by hand.
 ## Board provisioning
 
 The versioned lifecycle template is owned by
-`agentic-sdlc/templates/trello-board-workflow.yaml`. Use the Conductor to
+`agentic-sdlc/templates/trello-board-workflow.yaml`. Use the Orchestrator to
 inspect a board before changing it:
 
 ```
@@ -280,7 +280,7 @@ coding and evaluation triggers are unaffected.
   Trello (harmless, just unused) until manually cleaned up. A named tunnel with
   a real domain would fix this; out of scope for now.
 - **The WIP queue is in-memory only.** A card sitting in `Execution`
-  when Trello Conductor restarts will not be picked up automatically — move
+  when Trello Orchestrator restarts will not be picked up automatically — move
   it out and back into the list to re-trigger the webhook, or wait for a
   future periodic-sweep fallback (not built yet).
 - **The card-description parser is deliberately non-judgmental, not

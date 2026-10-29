@@ -25,7 +25,7 @@ Decisions, all made to follow the agentic-sdlc docs:
   contents API. Card↔backlog disagreement on id/product/version/status/hash is a
   hard stop with a card comment.
 - **The orchestrator does the freeze** (worktree + staged `intent.md` +
-  `frozenArtifactSha256`) so the hash precondition is checked Conductor-side
+  `frozenArtifactSha256`) so the hash precondition is checked Orchestrator-side
   before the agent runs. The agent re-verifies the bytes as its own gate.
 - **`approval` is approximated**: `approvedAt` = frontmatter `frozen_at` or the
   move timestamp; `approvedBy` = the Trello member who moved the card. Flagged
@@ -120,9 +120,9 @@ usable remote. So this was never a networking change.
   never lands in argv, `docker inspect`, or the process list. Verified with a
   bogus token: GitHub answers "Invalid username or token" (credentials sent and
   rejected) rather than "could not read Username" (none sent).
-- **The Conductor pushes, not the agent.** `AGENT_ROLES.md` grants the Spec &
+- **The Orchestrator pushes, not the agent.** `AGENT_ROLES.md` grants the Spec &
   Design Agent no write authority over the product repository, and the evaluator
-  handoff already makes the Conductor the component that publishes a branch. The
+  handoff already makes the Orchestrator the component that publishes a branch. The
   agent's own contract is commit-only, so without this step `spec.md` would never
   leave the host and Design Review would have nothing to open.
 - `SPEC_DESIGN_GITHUB_TOKEN` lets the container hold a narrower read-only

@@ -36,7 +36,7 @@ export async function readArtifactRef(ref: Record<string, unknown>, apiBase: str
   if (!path || path.startsWith("/") || path.split(/[\\/]/).includes("..")) throw new Error("Artifact path must be repository-relative and cannot traverse directories.");
   const encodedPath = path.split("/").map(encodeURIComponent).join("/");
   const url = `${apiBase.replace(/\/$/, "")}/repos/${parts[0]}/${parts[1]}/contents/${encodedPath}?ref=${encodeURIComponent(String(ref.commit_sha))}`;
-  const headers: Record<string, string> = { Accept: "application/vnd.github.raw+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "trello-conductor" };
+  const headers: Record<string, string> = { Accept: "application/vnd.github.raw+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "trello-orchestrator" };
   if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetchFn(url, { headers });
   if (!response.ok) throw new Error(`GitHub could not read ${parts[0]}/${parts[1]}@${String(ref.commit_sha).slice(0, 12)}:${path} (HTTP ${response.status}).`);

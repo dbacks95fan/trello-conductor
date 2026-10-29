@@ -53,7 +53,7 @@ app.post("/webhooks/trello", async (req, res) => {
   const signature = req.header("X-Trello-Webhook");
 
   if (!verifyTrelloSignature(rawBody, signature)) {
-    console.warn("[trello-conductor] Rejected webhook delivery: invalid signature.");
+    console.warn("[trello-orchestrator] Rejected webhook delivery: invalid signature.");
     res.sendStatus(401);
     return;
   }
@@ -66,7 +66,7 @@ app.post("/webhooks/trello", async (req, res) => {
   try {
     payload = JSON.parse(rawBody.toString("utf8"));
   } catch {
-    console.warn("[trello-conductor] Webhook body was not valid JSON.");
+    console.warn("[trello-orchestrator] Webhook body was not valid JSON.");
     return;
   }
 
@@ -179,7 +179,7 @@ app.post("/webhooks/trello", async (req, res) => {
           handleCardReviewForAgent(card.id);
           return;
         default:
-          await commentOnCard(card.id, `${action} was recorded as a board transition. This Conductor build does not automate that human-controlled downstream action.`);
+          await commentOnCard(card.id, `${action} was recorded as a board transition. This Orchestrator build does not automate that human-controlled downstream action.`);
       }
     },
   });
@@ -194,7 +194,7 @@ async function main() {
   // a port nothing is serving yet.
   await new Promise<void>((resolvePromise) => {
     app.listen(config.port, () => {
-      console.log(`[trello-conductor] listening on :${config.port}`);
+      console.log(`[trello-orchestrator] listening on :${config.port}`);
       resolvePromise();
     });
   });
@@ -202,10 +202,10 @@ async function main() {
   const boardRealId = await resolveBoardId();
   configuredBoardId = boardRealId;
   const webhook = await ensureWebhook(webhookUrl, boardRealId);
-  console.log(`[trello-conductor] Webhook active: ${webhook.id} -> ${webhook.callbackURL}`);
+  console.log(`[trello-orchestrator] Webhook active: ${webhook.id} -> ${webhook.callbackURL}`);
 }
 
 main().catch((err) => {
-  console.error("[trello-conductor] failed to start:", err);
+  console.error("[trello-orchestrator] failed to start:", err);
   process.exit(1);
 });

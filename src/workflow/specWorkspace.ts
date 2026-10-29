@@ -117,9 +117,9 @@ export interface PublishSpecBranchResult {
 }
 
 /** Publishes the work branch so a human Design Reviewer has something to open.
- *  The Conductor pushes, not the agent: AGENT_ROLES.md grants the Spec & Design
+ *  The Orchestrator pushes, not the agent: AGENT_ROLES.md grants the Spec & Design
  *  Agent no write authority over the product repository, and the evaluator
- *  handoff already establishes the Conductor as the component that publishes a
+ *  handoff already establishes the Orchestrator as the component that publishes a
  *  branch. Requires GITHUB_TOKEN in the orchestrator's environment. */
 export async function publishSpecBranch(
   workspace: Pick<SpecWorkspace, "path" | "branch" | "remoteUrl">,

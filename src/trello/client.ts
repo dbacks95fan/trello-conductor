@@ -226,7 +226,7 @@ export async function createWebhook(callbackURL: string, idModel: string): Promi
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      description: "Trello Conductor: Agentic SDLC lifecycle transition handler",
+      description: "Trello Orchestrator: Agentic SDLC lifecycle transition handler",
       callbackURL,
       idModel,
     }),
