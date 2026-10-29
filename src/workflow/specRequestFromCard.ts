@@ -150,7 +150,7 @@ export function parseCardIntentMetadata(card: TrelloCard): CardIntentMetadata {
     throw new SpecRequestError(`Intent Hash "${hashRaw}" is not a sha256 content hash.`);
   }
   // Intent Status is read for reconciliation but not treated as authorization.
-  // The Conductor enforces the Prioritized freeze before this resolver is called.
+  // The Orchestrator enforces the Prioritized freeze before this resolver is called.
   return {
     productId: productId!,
     intentId: intentId!,
@@ -193,7 +193,7 @@ async function fetchFrozenIntent(
   const headers: Record<string, string> = {
     Accept: "application/vnd.github.raw+json",
     "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent": "trello-conductor",
+    "User-Agent": "trello-orchestrator",
   };
   if (options.githubToken) headers.Authorization = `Bearer ${options.githubToken}`;
 

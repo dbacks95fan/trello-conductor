@@ -1,5 +1,5 @@
 // Copyright (c) 2026 DPSystems, LLC.
-// ABOUTME: Verifies the Conductor passes an accepted repository branch to the Coding Agent CLI.
+// ABOUTME: Verifies the Orchestrator passes an accepted repository branch to the Coding Agent CLI.
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,7 +9,7 @@ import type { WorkContract } from "../workflow/contractFromCard.js";
 import { runCodingAgent } from "./runCodingAgent.js";
 
 test("runs the Coding Agent against the accepted repository and base branch", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "conductor-coding-adapter-"));
+  const directory = mkdtempSync(join(tmpdir(), "orchestrator-coding-adapter-"));
   try {
     const cli = join(directory, "fake-coding-agent.cjs");
     writeFileSync(cli, "process.stdout.write(JSON.stringify({ args: process.argv.slice(2) }));\n", "utf8");

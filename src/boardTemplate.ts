@@ -29,7 +29,7 @@ export function parseBoardWorkflowTemplate(source: string): BoardWorkflowTemplat
   return { templateVersion: parsed.template_version as number, listNames: Object.freeze([...listNames]) };
 }
 
-/** Reads the repository-owned board template used by the Conductor bootstrap command. */
+/** Reads the repository-owned board template used by the Orchestrator bootstrap command. */
 export async function loadBoardWorkflowTemplate(path: string): Promise<BoardWorkflowTemplate> {
   return parseBoardWorkflowTemplate(await readFile(path, "utf8"));
 }

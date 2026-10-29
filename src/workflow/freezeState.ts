@@ -1,5 +1,5 @@
 // Copyright (c) 2026 DPSystems, LLC.
-// ABOUTME: Stores the Conductor's current intent-freeze projection on a Trello card.
+// ABOUTME: Stores the Orchestrator's current intent-freeze projection on a Trello card.
 
 import type { TrelloCard } from "../trello/client.js";
 

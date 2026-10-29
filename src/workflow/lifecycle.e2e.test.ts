@@ -1,5 +1,5 @@
 // Copyright (c) 2026 DPSystems, LLC.
-// ABOUTME: Exercises the documented board lifecycle through the local Conductor boundary.
+// ABOUTME: Exercises the documented board lifecycle through the local Orchestrator boundary.
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createLifecycleValidator } from "../contracts/lifecycle.js";
@@ -64,10 +64,10 @@ test("runs the canonical happy-path transitions with schema-valid local test dou
     ["backlog", "prioritized", "owner-1"],
     ["prioritized", "specDesign", "owner-1"],
     ["specDesign", "execution", "owner-1"],
-    ["execution", "evaluation", "conductor-1"],
-    ["evaluation", "humanApproval", "conductor-1"],
+    ["execution", "evaluation", "orchestrator-1"],
+    ["evaluation", "humanApproval", "orchestrator-1"],
     ["humanApproval", "release", "owner-1"],
-    ["release", "productionObservation", "conductor-1"],
+    ["release", "productionObservation", "orchestrator-1"],
     ["productionObservation", "done", "owner-1"],
   ];
 

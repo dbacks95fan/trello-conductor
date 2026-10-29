@@ -54,7 +54,7 @@ export interface LifecycleValidator {
   validate(definition: LifecycleDefinition, value: unknown): LifecycleValidation;
 }
 
-/** Build validators once from the schema path configured for this Conductor. */
+/** Build validators once from the schema path configured for this Orchestrator. */
 export function createLifecycleValidator(schemaPath: string): LifecycleValidator {
   const schema = JSON.parse(readFileSync(schemaPath, "utf8")) as {
     $schema?: string;

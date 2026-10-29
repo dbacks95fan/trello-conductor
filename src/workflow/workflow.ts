@@ -100,7 +100,7 @@ async function drainQueue(): Promise<void> {
 async function processCard(execution: AcceptedExecution): Promise<void> {
   const { cardId } = execution;
   const card = await getCard(cardId);
-  console.log(`[trello-conductor] Processing card ${card.idShort} "${card.name}"`);
+  console.log(`[trello-orchestrator] Processing card ${card.idShort} "${card.name}"`);
 
   let contract: WorkContract;
   let repositoryPath = "";
@@ -123,7 +123,7 @@ async function processCard(execution: AcceptedExecution): Promise<void> {
     baseBranch = loaded.baseBranch;
   } catch (err) {
     if (err instanceof Error) {
-      await commentOnCard(cardId, `⚠️ Trello Conductor could not build a Work Contract:\n\n${err.message}`);
+      await commentOnCard(cardId, `⚠️ Trello Orchestrator could not build a Work Contract:\n\n${err.message}`);
       return;
     }
     throw err;
@@ -244,7 +244,7 @@ async function evaluateCard(cardId: string): Promise<void> {
   if (status === "pass") {
     const humanApprovalListId = getWorkflowListId("humanApproval");
     await moveCard(cardId, humanApprovalListId);
-    await commentOnCard(cardId, "✅ Independent evaluation passed. Awaiting Human Approval. Trello Conductor never moves work to Done.");
+    await commentOnCard(cardId, "✅ Independent evaluation passed. Awaiting Human Approval. Trello Orchestrator never moves work to Done.");
   } else if (status === "fail") {
     await commentOnCard(cardId, `↩️ Independent evaluation failed. Findings require implementation rework. Card remains in ${getWorkflowStageLabel("evaluation")}; automatic retry is intentionally not enabled in v0.1.`);
   } else if (status === "needs_decision") {
@@ -259,7 +259,7 @@ async function processSpecCard(cardId: string, approval: MoveApproval): Promise<
   try {
     await runSpecAndDesign(cardId, approval);
   } catch (err) {
-    console.error(`[trello-conductor] Spec & Design failed for card ${cardId}:`, err);
+    console.error(`[trello-orchestrator] Spec & Design failed for card ${cardId}:`, err);
     await commentOnCard(
       cardId,
       `❌ Spec & Design could not be completed for this card: ${err instanceof Error ? err.message : String(err)}. The card stays in Spec & Design.`,
@@ -269,7 +269,7 @@ async function processSpecCard(cardId: string, approval: MoveApproval): Promise<
 
 async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise<void> {
   const card = await getCard(cardId);
-  console.log(`[trello-conductor] Spec & Design for card ${card.idShort} "${card.name}"`);
+  console.log(`[trello-orchestrator] Spec & Design for card ${card.idShort} "${card.name}"`);
   const activeFreeze = activeFreezeForCard(card);
   if (!activeFreeze) {
     await commentOnCard(cardId, "⛔ Spec & Design was not started: this card has no active Prioritized freeze. Return it to Backlog, reconcile the intent, then move it to Prioritized.");

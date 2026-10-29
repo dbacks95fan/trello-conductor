@@ -104,7 +104,7 @@ test("parseCardIntentMetadata rejects a card missing projected metadata", () => 
   assert.throws(() => parseCardIntentMetadata(card(desc)), (err: Error) => err instanceof SpecRequestError && /Intent ID/.test(err.message));
 });
 
-test("parseCardIntentMetadata leaves freeze authorization to the Conductor", () => {
+test("parseCardIntentMetadata leaves freeze authorization to the Orchestrator", () => {
   for (const status of ["New Ideas", "Refining", "Accepted", "Frozen"]) {
     const meta = parseCardIntentMetadata(card(description({ "Intent Status": status })));
     assert.equal(meta.intentStatus, status);

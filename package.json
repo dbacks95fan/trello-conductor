@@ -1,5 +1,5 @@
 {
-  "name": "trello-conductor",
+  "name": "trello-orchestrator",
   "version": "0.1.0",
   "description": "Trello webhook control plane for validated, ID-based Agentic SDLC transitions and stage handoffs.",
   "main": "index.js",
