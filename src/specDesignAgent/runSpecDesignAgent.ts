@@ -161,15 +161,25 @@ export interface RunSpecDesignAgentOptions {
   /** `null` withholds GitHub credentials; omitted falls back to configuration. */
   githubToken?: string | null;
   timeoutMs?: number;
+  runtime?: "docker" | "local";
+  localCommand?: string[];
+  agentDirectory?: string;
 }
 
 export async function runSpecDesignAgent(
   request: SpecDesignRequest,
   options: RunSpecDesignAgentOptions,
 ): Promise<SpecDesignResult> {
+  const provider = options.provider ?? config.specDesignProvider;
+  const runtime = options.runtime ?? config.specDesignRuntime;
+  if (runtime === "local") {
+    return runLocalSpecDesignAgent(request, options.hostWorkspace, provider, options);
+  }
+  if (runtime !== "docker") {
+    return parseAgentResult("", `Unsupported Spec & Design runtime: ${runtime}`, null);
+  }
   const docker = options.docker ?? [config.specDesignDockerBin];
   const image = options.image ?? config.specDesignImage;
-  const provider = options.provider ?? config.specDesignProvider;
   const envFile = options.envFile === undefined ? config.specDesignRuntimeEnvFile : options.envFile;
   const githubToken = options.githubToken === undefined ? config.specDesignGithubToken : options.githubToken;
   const timeoutMs = options.timeoutMs ?? config.specDesignTimeoutMs;
@@ -224,6 +234,48 @@ export async function runSpecDesignAgent(
         .then(() => resolvePromise(parseAgentResult(stdout, stderrWithError, exitCode, timedOut)));
     };
 
+    child.on("error", (err) => settle(null, err));
+    child.on("close", (exitCode) => settle(exitCode));
+  });
+}
+
+/** Runs the bounded agent CLI on this machine, using its existing Codex login.
+ *  This is useful for local development while production remains container-based. */
+async function runLocalSpecDesignAgent(
+  request: SpecDesignRequest,
+  hostWorkspace: string,
+  provider: string,
+  options: RunSpecDesignAgentOptions,
+): Promise<SpecDesignResult> {
+  const requestPath = join(hostWorkspace, REQUEST_BASENAME);
+  await writeFile(requestPath, JSON.stringify(request, null, 2), "utf8");
+  const command = options.localCommand ?? [config.specDesignUvBin];
+  const args = [...command.slice(1), "run", "spec-design-agent", "spec", "--request", requestPath, "--provider", provider];
+  return new Promise((resolvePromise) => {
+    const child = spawn(command[0], args, {
+      cwd: options.agentDirectory ?? config.specDesignAgentDirectory,
+      env: { ...process.env, SPEC_AGENT_PROVIDER: provider },
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, options.timeoutMs ?? config.specDesignTimeoutMs);
+    child.stdout.on("data", (chunk) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
+    let settled = false;
+    const settle = (exitCode: number | null, spawnError?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const stderrWithError = spawnError ? `${stderr}\n${String(spawnError)}` : stderr;
+      void rm(requestPath, { force: true })
+        .catch(() => undefined)
+        .then(() => resolvePromise(parseAgentResult(stdout, stderrWithError, exitCode, timedOut)));
+    };
     child.on("error", (err) => settle(null, err));
     child.on("close", (exitCode) => settle(exitCode));
   });

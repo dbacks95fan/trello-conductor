@@ -39,6 +39,7 @@ interface AcceptedExecution {
 const pendingQueue: AcceptedExecution[] = [];
 const pendingReviewQueue: string[] = [];
 const pendingSpecQueue: Array<{ cardId: string; approval: MoveApproval }> = [];
+const manualSpecMarker = "<!-- agentic-sdlc-manual-spec-kickoff ";
 let processing = false;
 let reviewing = false;
 let specing = false;
@@ -382,9 +383,8 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
       repository: config.targetRepo,
       baseCommit: workspace.baseCommit,
       branch: workspace.branch,
-      // The agent reads this from inside the container, where the host clone is
-      // bind-mounted at /work.
-      workspace: CONTAINER_WORKSPACE,
+      // Containers use their bind mount; the local development runner uses the host path.
+      workspace: config.specDesignRuntime === "local" ? workspace.path : CONTAINER_WORKSPACE,
     },
     readPaths: ["."],
     writePaths: [`.agent/work/${resolved.intentId}`],
@@ -599,5 +599,36 @@ export function handleCardReviewForAgent(cardId: string): void {
 }
 
 export function handleCardSpecAndDesign(cardId: string, approval: MoveApproval): void {
+  if (config.specDesignKickoffMode === "manual") {
+    void commentOnCard(
+      cardId,
+      `${manualSpecMarker}${JSON.stringify(approval)} -->\nSpec & Design is ready for a local manual run. From the Orchestrator repo, run: \`npm run spec-design:manual -- --card-id ${cardId}\` with \`SPEC_DESIGN_KICKOFF_MODE=manual\`, \`SPEC_DESIGN_RUNTIME=local\`, \`SPEC_DESIGN_AGENT_PROVIDER=codex\`, and \`SPEC_DESIGN_AGENT_DIR\` set to the local Spec & Design Agent checkout.`,
+    ).catch((err) => console.error(`[trello-orchestrator] Could not record the manual Spec & Design kickoff for ${cardId}:`, err));
+    return;
+  }
   enqueueSpec(cardId, approval);
+}
+
+/** Starts a previously recorded Spec & Design transition from the local CLI. */
+export async function runManualSpecDesign(cardId: string): Promise<void> {
+  const card = await getCard(cardId);
+  if (card.idList !== getWorkflowListId("specDesign")) {
+    throw new Error("The card must remain in Spec & Design before a manual run can start.");
+  }
+  const { getCardComments } = await import("../trello/client.js");
+  const comments = await getCardComments(cardId);
+  const marker = comments.find((comment) => comment.data.text?.startsWith(manualSpecMarker));
+  if (!marker?.data.text) {
+    throw new Error("No recorded Spec & Design transition was found. Move the card into Spec & Design through the Orchestrator first.");
+  }
+  let approval: MoveApproval;
+  try {
+    approval = JSON.parse(marker.data.text.slice(manualSpecMarker.length).split(" -->", 1)[0]) as MoveApproval;
+  } catch {
+    throw new Error("The recorded manual Spec & Design transition is malformed.");
+  }
+  if (!approval.eventId || !approval.approvedAt || !approval.approvedBy) {
+    throw new Error("The recorded manual Spec & Design transition is incomplete.");
+  }
+  await processSpecCard(cardId, approval);
 }

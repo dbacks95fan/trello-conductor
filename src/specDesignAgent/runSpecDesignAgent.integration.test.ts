@@ -11,6 +11,7 @@ import { runSpecDesignAgent, type SpecDesignRequest } from "./runSpecDesignAgent
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FAKE_DOCKER = join(here, "__fixtures__", "fake-docker.cjs");
+const FAKE_LOCAL_AGENT = join(here, "__fixtures__", "fake-local-agent.cjs");
 
 const FROZEN_INTENT = Buffer.from("---\nintent_id: INT-MF-0042\nstatus: Frozen\n---\n\n# Intent\n");
 const FROZEN_PROFILE = Buffer.from("Profile ID: MF-DEFAULT\nVersion: 1\n");
@@ -176,6 +177,32 @@ test("reports a missing docker binary instead of throwing", async () => {
     assert.equal(run.timedOut, false);
     assert.match(run.rawStderr, /ENOENT|spawn/i);
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("runs the local CLI with the request and selected provider, then removes the transient request", async () => {
+  const { dir, sha } = workspaceWithIntent();
+  const logPath = join(dir, "local-run.json");
+  process.env.FAKE_LOCAL_SPEC_LOG = logPath;
+  try {
+    const run = await runSpecDesignAgent(request(sha), {
+      hostWorkspace: dir,
+      runtime: "local",
+      localCommand: [process.execPath, FAKE_LOCAL_AGENT],
+      agentDirectory: dir,
+      provider: "codex",
+    });
+    assert.equal(run.exitCode, 0, run.rawStdout + run.rawStderr);
+    assert.equal(run.result?.status, "spec_ready");
+    const logged = JSON.parse(readFileSync(logPath, "utf8")) as { args: string[]; request: SpecDesignRequest; provider: string; cwd: string };
+    assert.equal(logged.provider, "codex");
+    assert.equal(logged.cwd, dir);
+    assert.equal(logged.args[logged.args.indexOf("--provider") + 1], "codex");
+    assert.equal(logged.request.workItem, "INT-MF-0042");
+    assert.ok(!existsSync(join(dir, "spec-design-request.json")));
+  } finally {
+    delete process.env.FAKE_LOCAL_SPEC_LOG;
     rmSync(dir, { recursive: true, force: true });
   }
 });

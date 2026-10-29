@@ -273,6 +273,26 @@ The orchestrator never builds the image — if Docker is not running or the imag
 is missing, the card gets a comment saying so and stays in Spec & Design; the
 coding and evaluation triggers are unaffected.
 
+### Local Spec & Design run (development only)
+
+For a manual local run, set `SPEC_DESIGN_KICKOFF_MODE=manual` in the Orchestrator
+webhook runtime. Moving a card into Spec & Design then records the transition and
+posts the local command instead of starting the agent. In the Windows Orchestrator
+checkout, set `SPEC_DESIGN_RUNTIME=local`, `SPEC_DESIGN_AGENT_PROVIDER=codex`,
+`SPEC_DESIGN_AGENT_DIR` to the local Spec & Design Agent checkout, and
+`TARGET_REPO` to a clean local MealFlow Git checkout, then run:
+
+```
+npm run spec-design:manual -- --card-id <trello-card-id>
+```
+
+This local command still uses the Orchestrator's Trello and GitHub credentials to
+verify the active freeze, prepare the isolated work branch, and publish the
+agent's committed artifacts. Codex CLI uses the local Windows sign-in. The
+workspace is based on the checkout's committed `HEAD`; uncommitted product files
+are not copied. The container path remains the default and the canonical
+deployment target.
+
 ## Known limitations (v0.1, on purpose)
 
 - **Quick tunnels are ephemeral.** Restarting `cloudflared` gives a new URL,
