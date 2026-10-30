@@ -254,7 +254,15 @@ async function runLocalSpecDesignAgent(
   return new Promise((resolvePromise) => {
     const child = spawn(command[0], args, {
       cwd: options.agentDirectory ?? config.specDesignAgentDirectory,
-      env: { ...process.env, SPEC_AGENT_PROVIDER: provider },
+      env: {
+        ...process.env,
+        ...(config.specDesignGithubToken ? { GITHUB_TOKEN: config.specDesignGithubToken } : {}),
+        GIT_AUTHOR_NAME: "Spec and Design Agent",
+        GIT_AUTHOR_EMAIL: "agent@agentic-sdlc.local",
+        GIT_COMMITTER_NAME: "Spec and Design Agent",
+        GIT_COMMITTER_EMAIL: "agent@agentic-sdlc.local",
+        SPEC_AGENT_PROVIDER: provider,
+      },
       windowsHide: true,
     });
     let stdout = "";

@@ -83,6 +83,7 @@ function card(): TrelloCard {
 }
 
 async function runPipeline(targetRepo: string, workspaceRoot: string) {
+  process.env.FAKE_DOCKER_TARGET_REPO = targetRepo;
   const resolved = await resolveSpecRequest(card(), {
     githubApiBase: "https://api.github.com",
     githubToken: "",
@@ -98,7 +99,8 @@ async function runPipeline(targetRepo: string, workspaceRoot: string) {
   });
 
   const workspace = await prepareSpecWorkspace({
-    targetRepo,
+    targetRepository: "https://github.com/example/mealflow",
+    baseCommit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: targetRepo }).toString().trim(),
     workspaceRoot,
     intentId: resolved.intentId,
     invocationId: "e2e-invocation-1",
@@ -143,10 +145,10 @@ async function runPipeline(targetRepo: string, workspaceRoot: string) {
       recorded_at: resolved.approvedAt,
     },
     target: {
-      repository: targetRepo,
+      repository: workspace.remoteUrl,
       baseCommit: workspace.baseCommit,
       branch: workspace.branch,
-      workspace: CONTAINER_WORKSPACE,
+      workspace: `${CONTAINER_WORKSPACE}/repository`,
     },
     readPaths: ["."],
     writePaths: [`.agent/work/${resolved.intentId}`],
@@ -176,18 +178,19 @@ test("card -> frozen intent/profile -> clone -> container -> human review", asyn
     assert.match(route.comment, /remains in Spec & Design/);
     assert.match(route.comment, /\.agent\/work\/INT-MF-0042\/spec\.md/);
 
-    assert.ok(existsSync(join(workspace.path, ".agent", "work", "INT-MF-0042", "spec.md")));
-    const log = execFileSync("git", ["log", "--oneline"], { cwd: workspace.path }).toString().trim().split("\n");
+    assert.ok(existsSync(join(workspace.repositoryPath, ".agent", "work", "INT-MF-0042", "spec.md")));
+    const log = execFileSync("git", ["log", "--oneline"], { cwd: workspace.repositoryPath }).toString().trim().split("\n");
     assert.match(log[0], /spec: INT-MF-0042/);
     assert.match(log[1], /initial/);
     assert.equal(
-      execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: workspace.path }).toString().trim(),
+      execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: workspace.repositoryPath }).toString().trim(),
       "work/INT-MF-0042",
     );
     // The product repository itself is untouched by the Spec & Design stage.
     assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: targetRepo }).toString().trim(), "");
   } finally {
     delete process.env.FAKE_DOCKER_MODE;
+    delete process.env.FAKE_DOCKER_TARGET_REPO;
     rmSync(targetRepo, { recursive: true, force: true });
     rmSync(workspaceRoot, { recursive: true, force: true });
   }
@@ -206,9 +209,10 @@ test("card -> frozen intent/profile -> clone -> container -> human decision in S
     assert.match(route.comment, /Which service owns meal-plan persistence\?/);
     assert.match(route.comment, /Product engineering lead/);
     // No spec is committed when a decision is outstanding.
-    assert.ok(!existsSync(join(workspace.path, ".agent", "work", "INT-MF-0042", "spec.md")));
+    assert.ok(!existsSync(join(workspace.repositoryPath, ".agent", "work", "INT-MF-0042", "spec.md")));
   } finally {
     delete process.env.FAKE_DOCKER_MODE;
+    delete process.env.FAKE_DOCKER_TARGET_REPO;
     rmSync(targetRepo, { recursive: true, force: true });
     rmSync(workspaceRoot, { recursive: true, force: true });
   }

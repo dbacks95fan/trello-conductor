@@ -1,9 +1,9 @@
-// ABOUTME: Creates a self-contained work/<intent-id> clone and stages invocation-scoped frozen input snapshots.
+// ABOUTME: Prepares an invocation bundle and frozen input snapshots for the Spec & Design Agent.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 const execFileAsync = promisify(execFile);
@@ -13,9 +13,9 @@ async function git(args: string[], cwd: string): Promise<string> {
   const { stdout } = await execFileAsync("git", args, { cwd, windowsHide: true });
   return stdout.trim();
 }
-
 export interface PrepareSpecWorkspaceInput {
-  targetRepo: string;
+  targetRepository: string;
+  baseCommit: string;
   workspaceRoot: string;
   intentId: string;
   invocationId: string;
@@ -24,8 +24,10 @@ export interface PrepareSpecWorkspaceInput {
 }
 
 export interface SpecWorkspace {
-  /** Absolute host path of the clone; bind-mounted into the container at /work. */
+  /** Invocation bundle bind-mounted into the container at /work. */
   path: string;
+  /** Agent-owned product clone inside the invocation bundle. */
+  repositoryPath: string;
   branch: string;
   baseCommit: string;
   frozenArtifactSha256: string;
@@ -34,43 +36,23 @@ export interface SpecWorkspace {
   created: boolean;
 }
 
-/** A full local clone rather than a `git worktree`: the Spec & Design Agent runs
- *  inside a container and needs a self-contained `.git` directory, which a
- *  worktree's `.git` link file (an absolute host path) cannot provide. The clone
- *  carries all history so the agent can verify `baseCommit`. Idempotent: an
- *  existing clone is reused so re-entering Spec & Design does not re-clone. */
+/** Stages the frozen inputs in an invocation bundle. The agent clones the product
+ *  repository and owns creation and publication of its work branch. */
 export async function prepareSpecWorkspace(input: PrepareSpecWorkspaceInput): Promise<SpecWorkspace> {
   const branch = `work/${input.intentId}`;
-  const path = resolve(input.workspaceRoot, input.intentId);
-  const baseCommit = await git(["rev-parse", "HEAD"], input.targetRepo);
-
-  let created = false;
-  if (!existsSync(join(path, ".git"))) {
-    await mkdir(input.workspaceRoot, { recursive: true });
-    await rm(path, { recursive: true, force: true });
-    await git(["clone", "--no-hardlinks", input.targetRepo, path], input.workspaceRoot);
-    const hasBranch = (await git(["branch", "--list", branch], path)).length > 0;
-    await git(hasBranch ? ["checkout", branch] : ["checkout", "-b", branch, baseCommit], path);
-    created = true;
-  } else {
-    await git(["checkout", branch], path).catch(() => undefined);
-  }
-
-  // Cloning from the local path is fast and needs no credentials, but leaves an
-  // origin the container cannot resolve. Retarget it at the real HTTPS remote so
-  // git behaves the same inside the container as on the host, and so the branch
-  // can be published for Design Review.
-  // `git config --get` exits non-zero when the key is absent; treat that as "no
-  // remote" so the explicit check below reports something actionable.
-  const remoteUrl = await git(["config", "--get", "remote.origin.url"], input.targetRepo).catch(() => "");
+  const path = resolve(input.workspaceRoot, `${input.intentId}-${input.invocationId}`);
+  const remoteUrl = input.targetRepository.replace(/\.git$/, "").replace(/\/$/, "");
   if (!remoteUrl.startsWith("https://")) {
     throw new Error(
-      `TARGET_REPO remote.origin.url must be an HTTPS GitHub URL so the container and the push step can reach it; found "${remoteUrl || "none"}".`,
+      `ProductConfig target_repository must be an HTTPS GitHub URL so the Spec & Design Agent can clone the product repository; found "${remoteUrl || "none"}".`,
     );
   }
-  const hasRemote = (await git(["remote"], path)).length > 0;
-  await git(hasRemote ? ["remote", "set-url", "origin", remoteUrl] : ["remote", "add", "origin", remoteUrl], path);
-
+  const existed = existsSync(path);
+  await mkdir(path, { recursive: true });
+  const repositoryPath = join(path, "repository");
+  if (existsSync(join(repositoryPath, ".git"))) {
+    throw new Error(`The Spec & Design Agent workspace already contains a product repository: ${repositoryPath}`);
+  }
   const inputDirectory = join(path, ".agent", "inputs", input.invocationId);
   await mkdir(inputDirectory, { recursive: true });
   const intentPath = join(inputDirectory, "intent.md");
@@ -85,7 +67,7 @@ export async function prepareSpecWorkspace(input: PrepareSpecWorkspaceInput): Pr
   await writeFile(policyProfilePath, input.frozenPolicyProfileBytes);
 
   const frozenArtifactSha256 = createHash("sha256").update(input.frozenIntentBytes).digest("hex");
-  return { path, branch, baseCommit, frozenArtifactSha256, remoteUrl, created };
+  return { path, repositoryPath, branch, baseCommit: input.baseCommit, frozenArtifactSha256, remoteUrl, created: !existed };
 }
 
 /** Read only a committed work artifact so worker working-tree changes cannot masquerade as a published output. */
@@ -99,43 +81,31 @@ export async function readCommittedWorkspaceFile(workspacePath: string, revision
   return stdout;
 }
 
-/** Git credential configuration that resolves the token from the environment at
- *  call time, so the secret never appears in argv, in a config file, or in the
- *  reflog. The empty first value clears any inherited helper. Mirrors the
- *  configuration handed to the container. */
-const CREDENTIAL_CONFIG = [
-  "-c",
-  "credential.helper=",
-  "-c",
-  'credential.helper=!f(){ echo username=x-access-token; echo "password=$GITHUB_TOKEN"; };f',
-];
-
-export interface PublishSpecBranchResult {
+export interface VerifySpecBranchResult {
   pushed: boolean;
   branchUrl: string;
   reason?: string;
 }
 
-/** Publishes the work branch so a human Design Reviewer has something to open.
- *  The Orchestrator pushes, not the agent: AGENT_ROLES.md grants the Spec & Design
- *  Agent no write authority over the product repository, and the evaluator
- *  handoff already establishes the Orchestrator as the component that publishes a
- *  branch. Requires GITHUB_TOKEN in the orchestrator's environment. */
-export async function publishSpecBranch(
+/** Confirms the agent's branch is visible on the remote without writing refs. */
+export async function verifySpecBranchPublished(
   workspace: Pick<SpecWorkspace, "path" | "branch" | "remoteUrl">,
   token: string,
-): Promise<PublishSpecBranchResult> {
+): Promise<VerifySpecBranchResult> {
   const branchUrl = `${workspace.remoteUrl.replace(/\.git$/, "")}/tree/${workspace.branch}`;
-  if (!token) {
-    return { pushed: false, branchUrl, reason: "GITHUB_TOKEN is not configured for the orchestrator." };
-  }
+  const authHeader = token ? `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}` : undefined;
+  const authEnv = authHeader
+    ? { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader", GIT_CONFIG_VALUE_0: authHeader }
+    : {};
   try {
-    await execFileAsync("git", [...CREDENTIAL_CONFIG, "push", "--set-upstream", "origin", workspace.branch], {
+    const { stdout } = await execFileAsync("git", ["ls-remote", "--heads", "origin", workspace.branch], {
       cwd: workspace.path,
       windowsHide: true,
-      env: { ...process.env, GITHUB_TOKEN: token },
+      env: { ...process.env, ...authEnv },
     });
-    return { pushed: true, branchUrl };
+    return stdout.trim()
+      ? { pushed: true, branchUrl }
+      : { pushed: false, branchUrl, reason: "The Spec & Design Agent branch is not visible on the remote." };
   } catch (err) {
     return { pushed: false, branchUrl, reason: err instanceof Error ? err.message : String(err) };
   }

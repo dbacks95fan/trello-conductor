@@ -1,26 +1,11 @@
 // ABOUTME: Resolves a Spec & Design work request from a Trello card and the intent in intent-backlog.
 import type { ProductBoardConfig, TrelloCard } from "../trello/client.js";
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { parse as parseYaml } from "yaml";
 import { config } from "../config.js";
 import { createLifecycleValidator } from "../contracts/lifecycle.js";
 
 const lifecycleValidator = createLifecycleValidator(config.lifecycleSchemaPath);
-const execFileAsync = promisify(execFile);
-
-async function configuredRepositoryUrl(): Promise<string> {
-  try {
-    const { stdout } = await execFileAsync("git", ["config", "--get", "remote.origin.url"], { cwd: config.targetRepo, windowsHide: true });
-    const remote = stdout.trim();
-    const ssh = remote.match(/^git@github\.com:(.+)$/);
-    return (ssh ? `https://github.com/${ssh[1]}` : remote).replace(/\.git$/, "").replace(/\/$/, "").toLowerCase();
-  } catch {
-    throw new SpecRequestError("The configured target repository has no readable origin URL.");
-  }
-}
-
 export interface ProductConfig extends ProductBoardConfig {
   product_id: string;
   product_name: string;
@@ -283,10 +268,8 @@ export async function resolveSpecRequest(
   if (productConfig.product_id !== meta.productId) {
     throw new SpecRequestError(`product.yaml product_id "${productConfig.product_id}" does not match the card's Product ID "${meta.productId}".`);
   }
-  const configuredTargetUrl = options.targetRepositoryUrl
-    ? options.targetRepositoryUrl.replace(/\.git$/, "").replace(/\/$/, "").toLowerCase()
-    : await configuredRepositoryUrl();
-  if (productConfig.target_repository.replace(/\.git$/, "").replace(/\/$/, "").toLowerCase() !== configuredTargetUrl) {
+  const configuredTargetUrl = options.targetRepositoryUrl?.replace(/\.git$/, "").replace(/\/$/, "").toLowerCase();
+  if (configuredTargetUrl && productConfig.target_repository.replace(/\.git$/, "").replace(/\/$/, "").toLowerCase() !== configuredTargetUrl) {
     throw new SpecRequestError("product.yaml target_repository does not match the configured target repository's origin URL.");
   }
   if (card.idBoard && productConfig.trello_board_id !== card.idBoard) {

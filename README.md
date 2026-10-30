@@ -87,24 +87,23 @@ engineering-stage handler for that work item:
    continue if the card and canonical intent disagree on identity, version,
    content hash, or policy-profile ID/version. It resolves `product.yaml` and
    the selected profile at that same pinned commit and verifies the profile.
-3. It creates the isolated `work/<intent-id>` workspace under
-   `SPEC_WORKSPACE_ROOT` - a **full local clone** of `TARGET_REPO` with the work
-   branch checked out at the current HEAD - and stages byte-exact frozen inputs
-   at `.agent/inputs/<invocation-id>/intent.md` and `policy-profile.md`. These
-   transient snapshots are mounted read-only into the agent. The agent verifies
-   them and commits its authorized copies with `spec.md` and `work-contract.yaml`.
-   A clone rather than a `git worktree`: a worktree's `.git` is a link file
-   holding an absolute host path, which does not resolve inside a container.
+3. It creates an invocation bundle under `SPEC_WORKSPACE_ROOT` containing
+   byte-exact frozen inputs at `.agent/inputs/<invocation-id>/intent.md` and
+   `policy-profile.md`. The Spec & Design Agent clones the configured GitHub
+   product repository, checks out the assigned base commit, creates
+   `work/<intent-id>`, and owns its artifact commit and push. This keeps Git
+   branch ownership with the agent, whether it runs in Docker or locally.
 4. It builds a request v2 per `spec-design-agent/schemas/spec-request.schema.json`
    (`runId`, `invocationId`, `triggerEventId`, work identity, the typed
    `FreezeActivationEvent`, target, and path permissions), and a canonical
    StageInvocation 1.1 with the same freeze and invocation IDs. It writes the request
-   into the workspace, and runs the agent as a one-shot Docker container with the
-   workspace bind-mounted at `/work` (`src/specDesignAgent/runSpecDesignAgent.ts`):
+   into the invocation bundle, then runs the agent in the configured runtime
+   (`src/specDesignAgent/runSpecDesignAgent.ts`). Docker remains the default;
+   local Codex CLI execution is available for manual development runs.
 
    ```
-   docker run --rm --mount type=bind,source=<workspace>,target=/work \
-     --mount type=bind,source=<workspace>/.agent/inputs/<invocation-id>,target=/work/.agent/inputs/<invocation-id>,readonly \
+   docker run --rm --mount type=bind,source=<invocation-bundle>,target=/work \
+     --mount type=bind,source=<invocation-bundle>/.agent/inputs/<invocation-id>,target=/work/.agent/inputs/<invocation-id>,readonly \
      --read-only --tmpfs /tmp -e HOME=/tmp -e SPEC_AGENT_PROVIDER=<provider> \
      -e GIT_CONFIG_COUNT=3 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/work \
      -e GIT_CONFIG_KEY_1=user.email -e GIT_CONFIG_KEY_2=user.name ... \
@@ -113,8 +112,8 @@ engineering-stage handler for that work item:
    ```
 
    The flags mirror the hardening in `spec-design-agent/compose.yaml`. The
-   request's `target.workspace` is `/work`, not the host path, because the agent
-   resolves it from inside the container. A run that overruns
+   request's `target.workspace` is `/work/repository`, not the host path, because
+   the agent clones the product repository there. A run that overruns
    `SPEC_DESIGN_AGENT_TIMEOUT_MS` is killed and reported as a timeout.
 
    The `GIT_CONFIG_*` variables are load-bearing, not decoration: without
@@ -135,12 +134,10 @@ engineering-stage handler for that work item:
    `needs_decision` → leave the card in Spec & Design with itemised decisions;
    `blocked` / `failed` / unparseable → leave the card in place with a
    comment. Human review remains in this column; the orchestrator never approves it.
-6. On `spec_ready` the **Orchestrator** pushes the work branch and comments its URL,
-   so a human Design Reviewer has something to open. The agent does not push:
-   `AGENT_ROLES.md` grants it no write authority over the product repository, and
-   the evaluator handoff already establishes the Orchestrator as the component that
-   publishes a branch. A failed push is reported on the card; the spec is still
-   committed locally on the work branch.
+6. The agent pushes its branch after committing. The Orchestrator only verifies
+   that the branch is visible on GitHub, then comments the link so the human
+   Design Reviewer can open it. The Orchestrator never writes product-repository
+   Git refs.
 
 The Prioritized transition records a schema-valid activation event and the
 authorizing Trello member ID. Spec & Design re-resolves both artifacts and
@@ -279,19 +276,18 @@ For a manual local run, set `SPEC_DESIGN_KICKOFF_MODE=manual` in the Orchestrato
 webhook runtime. Moving a card into Spec & Design then records the transition and
 posts the local command instead of starting the agent. In the Windows Orchestrator
 checkout, set `SPEC_DESIGN_RUNTIME=local`, `SPEC_DESIGN_AGENT_PROVIDER=codex`,
-`SPEC_DESIGN_AGENT_DIR` to the local Spec & Design Agent checkout, and
-`TARGET_REPO` to a clean local MealFlow Git checkout, then run:
+and `SPEC_DESIGN_AGENT_DIR` to the local Spec & Design Agent checkout, then run:
 
 ```
 npm run spec-design:manual -- --card-id <trello-card-id>
 ```
 
 This local command still uses the Orchestrator's Trello and GitHub credentials to
-verify the active freeze, prepare the isolated work branch, and publish the
-agent's committed artifacts. Codex CLI uses the local Windows sign-in. The
-workspace is based on the checkout's committed `HEAD`; uncommitted product files
-are not copied. The container path remains the default and the canonical
-deployment target.
+verify the active freeze, stage exact input snapshots, and run the agent. The
+agent clones the product repository at its current GitHub default-branch commit,
+creates the work branch, commits, and pushes its own artifacts. Codex CLI uses
+the local Windows sign-in. The container path remains the default and the
+canonical deployment target.
 
 ## Known limitations (v0.1, on purpose)
 
