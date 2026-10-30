@@ -12,6 +12,12 @@ function required(name: string): string {
   return value;
 }
 
+function choice<T extends readonly string[]>(name: string, values: T, fallback: T[number]): T[number] {
+  const value = process.env[name] ?? fallback;
+  if (!values.includes(value)) throw new Error(`${name} must be one of: ${values.join(", ")}`);
+  return value as T[number];
+}
+
 const targetRepo = required("TARGET_REPO");
 
 export const config = {
@@ -31,6 +37,10 @@ export const config = {
   specDesignDockerBin: process.env.SPEC_DESIGN_AGENT_DOCKER ?? "docker",
   specDesignImage: process.env.SPEC_DESIGN_AGENT_IMAGE ?? "spec-design-agent:local",
   specDesignProvider: process.env.SPEC_DESIGN_AGENT_PROVIDER ?? "claude",
+  specDesignKickoffMode: choice("SPEC_DESIGN_KICKOFF_MODE", ["auto", "manual"] as const, "auto"),
+  specDesignRuntime: choice("SPEC_DESIGN_RUNTIME", ["docker", "local"] as const, "docker"),
+  specDesignAgentDirectory: process.env.SPEC_DESIGN_AGENT_DIR ?? resolve(targetRepo, "..", "spec-design-agent"),
+  specDesignUvBin: process.env.SPEC_DESIGN_UV ?? "uv",
   // env-file passed to the container for provider credentials (ANTHROPIC_API_KEY
   // etc.). Defaults to the spec-design-agent repo's own .runtime.env.
   specDesignRuntimeEnvFile:

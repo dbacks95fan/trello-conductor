@@ -3,7 +3,7 @@ import { runCodingAgent } from "../codingAgent/runCodingAgent.js";
 import { CONTAINER_WORKSPACE, runSpecDesignAgent, type SpecDesignRequest } from "../specDesignAgent/runSpecDesignAgent.js";
 import { resolveSpecRequest, SpecRequestError } from "./specRequestFromCard.js";
 import { routeSpecResult } from "./specRouting.js";
-import { prepareSpecWorkspace, publishSpecBranch, readCommittedWorkspaceFile } from "./specWorkspace.js";
+import { prepareSpecWorkspace, readCommittedWorkspaceFile, verifySpecBranchPublished } from "./specWorkspace.js";
 import { prepareGitEvaluationHandoff } from "../evaluatorAgent/gitHandoff.js";
 import { runRemoteEvaluator } from "../evaluatorAgent/remote.js";
 import { commentOnCard, getCard, getWorkflowListId, getWorkflowStageLabel, moveCard, updateCardDescription } from "../trello/client.js";
@@ -39,6 +39,7 @@ interface AcceptedExecution {
 const pendingQueue: AcceptedExecution[] = [];
 const pendingReviewQueue: string[] = [];
 const pendingSpecQueue: Array<{ cardId: string; approval: MoveApproval }> = [];
+const manualSpecMarker = "<!-- agentic-sdlc-manual-spec-kickoff ";
 let processing = false;
 let reviewing = false;
 let specing = false;
@@ -267,6 +268,31 @@ async function processSpecCard(cardId: string, approval: MoveApproval): Promise<
   }
 }
 
+async function resolveTargetBaseCommit(repositoryUrl: string): Promise<string> {
+  const match = repositoryUrl.replace(/\.git$/, "").match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)$/i);
+  if (!match) throw new Error("ProductConfig target_repository must be a GitHub repository URL.");
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "trello-orchestrator",
+  };
+  if (config.githubToken) headers.Authorization = `Bearer ${config.githubToken}`;
+  const repositoryApi = `${config.intentBacklogApiBase.replace(/\/$/, "")}/repos/${match[1]}/${match[2]}`;
+  const repositoryResponse = await fetch(repositoryApi, { headers });
+  if (!repositoryResponse.ok) throw new Error(`GitHub returned HTTP ${repositoryResponse.status} while resolving the product repository default branch.`);
+  const repository = (await repositoryResponse.json()) as { default_branch?: unknown };
+  if (typeof repository.default_branch !== "string" || !repository.default_branch) {
+    throw new Error("GitHub did not return a default branch for the product repository.");
+  }
+  const commitResponse = await fetch(`${repositoryApi}/commits/${encodeURIComponent(repository.default_branch)}`, { headers });
+  if (!commitResponse.ok) throw new Error(`GitHub returned HTTP ${commitResponse.status} while resolving the product repository base commit.`);
+  const commit = (await commitResponse.json()) as { sha?: unknown };
+  if (typeof commit.sha !== "string" || !/^[0-9a-f]{40}$/.test(commit.sha)) {
+    throw new Error("GitHub did not return a valid full commit SHA for the product repository default branch.");
+  }
+  return commit.sha;
+}
+
 async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise<void> {
   const card = await getCard(cardId);
   console.log(`[trello-orchestrator] Spec & Design for card ${card.idShort} "${card.name}"`);
@@ -350,10 +376,13 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
     return;
   }
 
+  const targetBaseCommit = await resolveTargetBaseCommit(resolved.productConfig.target_repository);
+
   let workspace;
   try {
     workspace = await prepareSpecWorkspace({
-      targetRepo: config.targetRepo,
+      targetRepository: resolved.productConfig.target_repository,
+      baseCommit: targetBaseCommit,
       workspaceRoot: config.specWorkspaceRoot,
       intentId: resolved.intentId,
       invocationId,
@@ -379,12 +408,11 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
     intentContentSha256: resolved.intentContentSha256,
     freezeActivation,
     target: {
-      repository: config.targetRepo,
+      repository: workspace.remoteUrl,
       baseCommit: workspace.baseCommit,
       branch: workspace.branch,
-      // The agent reads this from inside the container, where the host clone is
-      // bind-mounted at /work.
-      workspace: CONTAINER_WORKSPACE,
+      // Containers use their bind mount; the local development runner uses the host path.
+      workspace: config.specDesignRuntime === "local" ? workspace.repositoryPath : `${CONTAINER_WORKSPACE}/repository`,
     },
     readPaths: ["."],
     writePaths: [`.agent/work/${resolved.intentId}`],
@@ -432,7 +460,7 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
 
   await commentOnCard(
     cardId,
-    `🧭 Spec & Design Agent container started for \`${request.workItem}\` (run \`${request.runId}\`) on branch \`${workspace.branch}\`.`,
+    `🧭 Spec & Design Agent started for \`${request.workItem}\` (run \`${request.runId}\`) on branch \`${workspace.branch}\`.`,
   );
 
   const run = await runSpecDesignAgent(request, { hostWorkspace: workspace.path });
@@ -448,7 +476,7 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
       return;
     }
     try {
-      const contractText = await readCommittedWorkspaceFile(workspace.path, specCommit, contractPath);
+      const contractText = await readCommittedWorkspaceFile(workspace.repositoryPath, specCommit, contractPath);
       const contract = parseYaml(contractText);
       const issues = validateWorkContractV3(contract, {
         productId: resolved.productId,
@@ -477,7 +505,7 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
         await commentOnCard(cardId, "? Spec & Design output is not eligible for Design Review: the committed spec.md path is missing.");
         return;
       }
-      const specText = await readCommittedWorkspaceFile(workspace.path, specCommit, specPath);
+      const specText = await readCommittedWorkspaceFile(workspace.repositoryPath, specCommit, specPath);
       const repository = workspace.remoteUrl.replace(/\.git$/, "");
       const outputArtifacts = [
         { repository, commit_sha: specCommit, path: specPath, sha256: createHash("sha256").update(specText, "utf8").digest("hex") },
@@ -497,7 +525,7 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
   await commentOnCard(cardId, route.comment);
 
   if (route.comment.includes("spec ready for human review")) {
-    const published = await publishSpecBranch(workspace, config.githubToken);
+    const published = await verifySpecBranchPublished({ ...workspace, path: workspace.repositoryPath }, config.githubToken);
     await commentOnCard(
       cardId,
       published.pushed
@@ -599,5 +627,36 @@ export function handleCardReviewForAgent(cardId: string): void {
 }
 
 export function handleCardSpecAndDesign(cardId: string, approval: MoveApproval): void {
+  if (config.specDesignKickoffMode === "manual") {
+    void commentOnCard(
+      cardId,
+      `${manualSpecMarker}${JSON.stringify(approval)} -->\nSpec & Design is ready for a local manual run. From the Orchestrator repo, run: \`npm run spec-design:manual -- --card-id ${cardId}\` with \`SPEC_DESIGN_KICKOFF_MODE=manual\`, \`SPEC_DESIGN_RUNTIME=local\`, \`SPEC_DESIGN_AGENT_PROVIDER=codex\`, and \`SPEC_DESIGN_AGENT_DIR\` set to the local Spec & Design Agent checkout.`,
+    ).catch((err) => console.error(`[trello-orchestrator] Could not record the manual Spec & Design kickoff for ${cardId}:`, err));
+    return;
+  }
   enqueueSpec(cardId, approval);
+}
+
+/** Starts a previously recorded Spec & Design transition from the local CLI. */
+export async function runManualSpecDesign(cardId: string): Promise<void> {
+  const card = await getCard(cardId);
+  if (card.idList !== getWorkflowListId("specDesign")) {
+    throw new Error("The card must remain in Spec & Design before a manual run can start.");
+  }
+  const { getCardComments } = await import("../trello/client.js");
+  const comments = await getCardComments(cardId);
+  const marker = comments.find((comment) => comment.data.text?.startsWith(manualSpecMarker));
+  if (!marker?.data.text) {
+    throw new Error("No recorded Spec & Design transition was found. Move the card into Spec & Design through the Orchestrator first.");
+  }
+  let approval: MoveApproval;
+  try {
+    approval = JSON.parse(marker.data.text.slice(manualSpecMarker.length).split(" -->", 1)[0]) as MoveApproval;
+  } catch {
+    throw new Error("The recorded manual Spec & Design transition is malformed.");
+  }
+  if (!approval.eventId || !approval.approvedAt || !approval.approvedBy) {
+    throw new Error("The recorded manual Spec & Design transition is incomplete.");
+  }
+  await processSpecCard(cardId, approval);
 }

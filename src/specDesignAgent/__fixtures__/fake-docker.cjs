@@ -27,13 +27,23 @@ if (!source) {
 const containerRequest = argv[argv.indexOf("--request") + 1];
 const hostRequest = path.join(source, containerRequest.slice(target.length + 1));
 const request = JSON.parse(fs.readFileSync(hostRequest, "utf8"));
-
-const mode = process.env.FAKE_DOCKER_MODE || "spec_ready";
-
-if (mode === "hang") {
+if (process.env.FAKE_DOCKER_MODE === "hang") {
   setTimeout(() => process.exit(0), 60_000);
   return;
 }
+const repositoryRoot = path.join(source, "repository");
+if (!fs.existsSync(path.join(repositoryRoot, ".git"))) {
+  const targetRepo = process.env.FAKE_DOCKER_TARGET_REPO;
+  if (!targetRepo) {
+    process.stderr.write("fake-docker: no product repository fixture configured\n");
+    process.exit(125);
+  }
+  cp.execFileSync("git", ["clone", "--no-hardlinks", "--no-checkout", targetRepo, repositoryRoot], { stdio: "pipe" });
+  cp.execFileSync("git", ["checkout", "--detach", request.target.baseCommit], { cwd: repositoryRoot, stdio: "pipe" });
+  cp.execFileSync("git", ["checkout", "-b", request.target.branch, request.target.baseCommit], { cwd: repositoryRoot, stdio: "pipe" });
+}
+
+const mode = process.env.FAKE_DOCKER_MODE || "spec_ready";
 
 if (mode === "garbage") {
   process.stderr.write("Traceback (most recent call last):\n  RuntimeError: provider exploded\n");
@@ -98,16 +108,16 @@ if (mode === "needs_decision") {
 
 const specRelPath = path.posix.join(".agent", "work", request.workItem, "spec.md");
 const workContractRelPath = path.posix.join(".agent", "work", request.workItem, "work-contract.yaml");
-fs.mkdirSync(path.dirname(path.join(source, specRelPath)), { recursive: true });
-fs.writeFileSync(path.join(source, ".agent", "work", request.workItem, "intent.md"), intent);
-fs.writeFileSync(path.join(source, ".agent", "work", request.workItem, "policy-profile.md"), policyProfile);
+fs.mkdirSync(path.dirname(path.join(repositoryRoot, specRelPath)), { recursive: true });
+fs.writeFileSync(path.join(repositoryRoot, ".agent", "work", request.workItem, "intent.md"), intent);
+fs.writeFileSync(path.join(repositoryRoot, ".agent", "work", request.workItem, "policy-profile.md"), policyProfile);
 fs.writeFileSync(
-  path.join(source, specRelPath),
+  path.join(repositoryRoot, specRelPath),
   "# Requirements and Design Specification\n\n## Traceability to frozen intent\n",
 );
-fs.writeFileSync(path.join(source, workContractRelPath), "schema_version: 3\n");
+fs.writeFileSync(path.join(repositoryRoot, workContractRelPath), "schema_version: 3\n");
 const git = (args) =>
-  cp.execFileSync("git", ["-c", "user.email=a@b.c", "-c", "user.name=Spec Agent", ...args], { cwd: source }).toString().trim();
+  cp.execFileSync("git", ["-c", "user.email=a@b.c", "-c", "user.name=Spec Agent", ...args], { cwd: repositoryRoot }).toString().trim();
 // Force-add only authorized outputs, matching the real agent's artifact contract.
 git(["add", "--force", "--", ".agent/work/" + request.workItem + "/intent.md", ".agent/work/" + request.workItem + "/policy-profile.md", specRelPath, workContractRelPath]);
 git(["commit", "-m", `spec: ${request.workItem}`]);
@@ -120,9 +130,9 @@ process.stdout.write(
     summary: "Specification produced from the frozen intent.",
     specCommit,
     specPath: specRelPath,
-    specSha256: crypto.createHash("sha256").update(fs.readFileSync(path.join(source, specRelPath))).digest("hex"),
+    specSha256: crypto.createHash("sha256").update(fs.readFileSync(path.join(repositoryRoot, specRelPath))).digest("hex"),
     specVersion: 1,
     workContractPath: workContractRelPath,
-    workContractSha256: crypto.createHash("sha256").update(fs.readFileSync(path.join(source, workContractRelPath))).digest("hex"),
+    workContractSha256: crypto.createHash("sha256").update(fs.readFileSync(path.join(repositoryRoot, workContractRelPath))).digest("hex"),
   }),
 );

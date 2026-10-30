@@ -11,27 +11,30 @@ import { runSpecDesignAgent, type SpecDesignRequest } from "./runSpecDesignAgent
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FAKE_DOCKER = join(here, "__fixtures__", "fake-docker.cjs");
+const FAKE_LOCAL_AGENT = join(here, "__fixtures__", "fake-local-agent.cjs");
 
 const FROZEN_INTENT = Buffer.from("---\nintent_id: INT-MF-0042\nstatus: Frozen\n---\n\n# Intent\n");
 const FROZEN_PROFILE = Buffer.from("Profile ID: MF-DEFAULT\nVersion: 1\n");
 const INVOCATION_ID = "invoke-integration-1";
 
-function workspaceWithIntent(): { dir: string; sha: string } {
+function workspaceWithIntent(): { dir: string; targetRepo: string; sha: string; baseCommit: string } {
   const dir = mkdtempSync(join(tmpdir(), "spec-container-ws-"));
-  const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "pipe" });
-  git("init", "-b", "work/INT-MF-0042");
+  const targetRepo = mkdtempSync(join(tmpdir(), "spec-container-target-"));
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: targetRepo, stdio: "pipe" });
+  git("init", "-b", "main");
   git("config", "user.email", "test@example.com");
   git("config", "user.name", "Test");
-  writeFileSync(join(dir, "app.js"), "// product code\n");
+  writeFileSync(join(targetRepo, "app.js"), "// product code\n");
   git("add", "-A");
   git("commit", "-m", "initial");
+  const baseCommit = git("rev-parse", "HEAD").toString().trim();
   mkdirSync(join(dir, ".agent", "inputs", INVOCATION_ID), { recursive: true });
   writeFileSync(join(dir, ".agent", "inputs", INVOCATION_ID, "intent.md"), FROZEN_INTENT);
   writeFileSync(join(dir, ".agent", "inputs", INVOCATION_ID, "policy-profile.md"), FROZEN_PROFILE);
-  return { dir, sha: createHash("sha256").update(FROZEN_INTENT).digest("hex") };
+  return { dir, targetRepo, sha: createHash("sha256").update(FROZEN_INTENT).digest("hex"), baseCommit };
 }
 
-function request(workspaceSha: string): SpecDesignRequest {
+function request(workspaceSha: string, baseCommit: string): SpecDesignRequest {
   return {
     requestVersion: 2,
     runId: "run-integration-1",
@@ -63,20 +66,21 @@ function request(workspaceSha: string): SpecDesignRequest {
       authorized_by: "Sobe",
       recorded_at: "2026-09-06T09:00:00.000Z",
     },
-    target: { repository: "C:/Repos/menuapp", baseCommit: "d".repeat(40), branch: "work/INT-MF-0042", workspace: "/work" },
+    target: { repository: "https://github.com/example/menuapp", baseCommit, branch: "work/INT-MF-0042", workspace: "/work/repository" },
     readPaths: ["."],
     writePaths: [".agent/work/INT-MF-0042"],
   };
 }
 
 test("writes the request into the mount, runs the container, and parses the result", async () => {
-  const { dir, sha } = workspaceWithIntent();
+  const { dir, targetRepo, sha, baseCommit } = workspaceWithIntent();
   const argvLog = join(mkdtempSync(join(tmpdir(), "spec-container-log-")), "argv.json");
   process.env.FAKE_DOCKER_ARGV_LOG = argvLog;
   process.env.FAKE_DOCKER_MODE = "spec_ready";
+  process.env.FAKE_DOCKER_TARGET_REPO = targetRepo;
 
   try {
-    const run = await runSpecDesignAgent(request(sha), {
+    const run = await runSpecDesignAgent(request(sha, baseCommit), {
       hostWorkspace: dir,
       docker: ["node", FAKE_DOCKER],
       image: "spec-design-agent:local",
@@ -96,22 +100,25 @@ test("writes the request into the mount, runs the container, and parses the resu
     assert.ok(argv.includes("SPEC_AGENT_PROVIDER=mock"));
 
     // The spec is committed on the work branch inside the mounted workspace.
-    assert.ok(existsSync(join(dir, ".agent", "work", "INT-MF-0042", "spec.md")));
+    assert.ok(existsSync(join(dir, "repository", ".agent", "work", "INT-MF-0042", "spec.md")));
     // The transient request file is cleaned up afterwards.
     assert.ok(!existsSync(join(dir, "spec-design-request.json")));
   } finally {
     delete process.env.FAKE_DOCKER_ARGV_LOG;
     delete process.env.FAKE_DOCKER_MODE;
+    delete process.env.FAKE_DOCKER_TARGET_REPO;
     rmSync(dir, { recursive: true, force: true });
+    rmSync(targetRepo, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     rmSync(dirname(argvLog), { recursive: true, force: true });
   }
 });
 
 test("surfaces a container crash as an unparseable result", async () => {
-  const { dir, sha } = workspaceWithIntent();
+  const { dir, targetRepo, sha, baseCommit } = workspaceWithIntent();
   process.env.FAKE_DOCKER_MODE = "garbage";
+  process.env.FAKE_DOCKER_TARGET_REPO = targetRepo;
   try {
-    const run = await runSpecDesignAgent(request(sha), {
+    const run = await runSpecDesignAgent(request(sha, baseCommit), {
       hostWorkspace: dir,
       docker: ["node", FAKE_DOCKER],
       provider: "mock",
@@ -122,15 +129,18 @@ test("surfaces a container crash as an unparseable result", async () => {
     assert.match(run.rawStderr, /provider exploded/);
   } finally {
     delete process.env.FAKE_DOCKER_MODE;
+    delete process.env.FAKE_DOCKER_TARGET_REPO;
     rmSync(dir, { recursive: true, force: true });
+    rmSync(targetRepo, { recursive: true, force: true });
   }
 });
 
 test("reports a mutated frozen intent as blocked", async () => {
-  const { dir } = workspaceWithIntent();
+  const { dir, targetRepo, sha, baseCommit } = workspaceWithIntent();
   process.env.FAKE_DOCKER_MODE = "spec_ready";
+  process.env.FAKE_DOCKER_TARGET_REPO = targetRepo;
   try {
-    const run = await runSpecDesignAgent(request("f".repeat(64)), {
+    const run = await runSpecDesignAgent(request("f".repeat(64), baseCommit), {
       hostWorkspace: dir,
       docker: ["node", FAKE_DOCKER],
       provider: "mock",
@@ -140,15 +150,18 @@ test("reports a mutated frozen intent as blocked", async () => {
     assert.deepEqual(run.result?.blockingConcerns, ["INTENT_MUTATED"]);
   } finally {
     delete process.env.FAKE_DOCKER_MODE;
+    delete process.env.FAKE_DOCKER_TARGET_REPO;
     rmSync(dir, { recursive: true, force: true });
+    rmSync(targetRepo, { recursive: true, force: true });
   }
 });
 
 test("kills the container and reports a timeout when it overruns its budget", async () => {
-  const { dir, sha } = workspaceWithIntent();
+  const { dir, targetRepo, sha, baseCommit } = workspaceWithIntent();
   process.env.FAKE_DOCKER_MODE = "hang";
+  process.env.FAKE_DOCKER_TARGET_REPO = targetRepo;
   try {
-    const run = await runSpecDesignAgent(request(sha), {
+    const run = await runSpecDesignAgent(request(sha, baseCommit), {
       hostWorkspace: dir,
       docker: ["node", FAKE_DOCKER],
       provider: "mock",
@@ -159,14 +172,16 @@ test("kills the container and reports a timeout when it overruns its budget", as
     assert.equal(run.result, null);
   } finally {
     delete process.env.FAKE_DOCKER_MODE;
+    delete process.env.FAKE_DOCKER_TARGET_REPO;
     rmSync(dir, { recursive: true, force: true });
+    rmSync(targetRepo, { recursive: true, force: true });
   }
 });
 
 test("reports a missing docker binary instead of throwing", async () => {
-  const { dir, sha } = workspaceWithIntent();
+  const { dir, targetRepo, sha, baseCommit } = workspaceWithIntent();
   try {
-    const run = await runSpecDesignAgent(request(sha), {
+    const run = await runSpecDesignAgent(request(sha, baseCommit), {
       hostWorkspace: dir,
       docker: ["this-docker-does-not-exist-9f3a"],
       provider: "mock",
@@ -177,5 +192,33 @@ test("reports a missing docker binary instead of throwing", async () => {
     assert.match(run.rawStderr, /ENOENT|spawn/i);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    rmSync(targetRepo, { recursive: true, force: true });
+  }
+});
+
+test("runs the local CLI with the request and selected provider, then removes the transient request", async () => {
+  const { dir, targetRepo, sha, baseCommit } = workspaceWithIntent();
+  const logPath = join(dir, "local-run.json");
+  process.env.FAKE_LOCAL_SPEC_LOG = logPath;
+  try {
+    const run = await runSpecDesignAgent(request(sha, baseCommit), {
+      hostWorkspace: dir,
+      runtime: "local",
+      localCommand: [process.execPath, FAKE_LOCAL_AGENT],
+      agentDirectory: dir,
+      provider: "codex",
+    });
+    assert.equal(run.exitCode, 0, run.rawStdout + run.rawStderr);
+    assert.equal(run.result?.status, "spec_ready");
+    const logged = JSON.parse(readFileSync(logPath, "utf8")) as { args: string[]; request: SpecDesignRequest; provider: string; cwd: string };
+    assert.equal(logged.provider, "codex");
+    assert.equal(logged.cwd, dir);
+    assert.equal(logged.args[logged.args.indexOf("--provider") + 1], "codex");
+    assert.equal(logged.request.workItem, "INT-MF-0042");
+    assert.ok(!existsSync(join(dir, "spec-design-request.json")));
+  } finally {
+    delete process.env.FAKE_LOCAL_SPEC_LOG;
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(targetRepo, { recursive: true, force: true });
   }
 });
