@@ -31,6 +31,8 @@ export const config = {
     process.env.AGENTIC_SDLC_SCHEMA_PATH ?? resolve(targetRepo, "..", "agentic-sdlc", "schemas", "lifecycle-contracts.schema.json"),
   wipLimit: Number(process.env.WIP_LIMIT ?? "1"),
   codingAgentCli: required("CODING_AGENT_CLI"),
+  codingAgentRuntimeEnvFile:
+    process.env.CODING_AGENT_RUNTIME_ENV ?? resolve(targetRepo, "..", ".config", "coding-agent", "runtime.env"),
   // The Spec & Design Agent runs as a one-shot Docker container on this host.
   // The image is built and deployed separately (spec-design-agent/compose.yaml);
   // the orchestrator only invokes `docker run` against it.
@@ -41,17 +43,16 @@ export const config = {
   specDesignRuntime: choice("SPEC_DESIGN_RUNTIME", ["docker", "local"] as const, "docker"),
   specDesignAgentDirectory: process.env.SPEC_DESIGN_AGENT_DIR ?? resolve(targetRepo, "..", "spec-design-agent"),
   specDesignUvBin: process.env.SPEC_DESIGN_UV ?? "uv",
-  // env-file passed to the container for provider credentials (ANTHROPIC_API_KEY
-  // etc.). Defaults to the spec-design-agent repo's own .runtime.env.
+  // Agent-specific env-file passed directly to the Spec & Design runtime.
   specDesignRuntimeEnvFile:
-    process.env.SPEC_DESIGN_AGENT_RUNTIME_ENV ?? resolve(targetRepo, "..", "spec-design-agent", ".runtime.env"),
+    process.env.SPEC_DESIGN_AGENT_RUNTIME_ENV ?? resolve(targetRepo, "..", ".config", "spec-design-agent", "runtime.env"),
   specDesignTimeoutMs: Number(process.env.SPEC_DESIGN_AGENT_TIMEOUT_MS ?? "900000"),
-  // Role-scoped credentials. Intent-backlog access tokens are separate from
-  // GitHub App installation tokens for product-code repositories.
+  // Intent-backlog uses its dedicated access token. Product repositories use
+  // short-lived, repository-scoped GitHub App installation tokens.
   intentBacklogReadToken: process.env.INTENT_BACKLOG_READ_TOKEN ?? "",
-  orchestratorGithubAppReadToken: process.env.ORCHESTRATOR_GITHUB_APP_READ_TOKEN ?? "",
-  specDesignGithubAppWriteToken: process.env.SPEC_DESIGN_GITHUB_APP_WRITE_TOKEN ?? "",
-  evaluatorGithubAppWriteToken: process.env.EVALUATOR_GITHUB_APP_WRITE_TOKEN ?? "",
+  orchestratorGithubAppId: process.env.ORCHESTRATOR_GITHUB_APP_ID ?? "",
+  orchestratorGithubAppInstallationId: process.env.ORCHESTRATOR_GITHUB_APP_INSTALLATION_ID ?? "",
+  orchestratorGithubAppPrivateKeyFile: process.env.ORCHESTRATOR_GITHUB_APP_PRIVATE_KEY_FILE ?? "",
   evaluatorApiUrl: required("EVALUATOR_API_URL"),
   evaluatorApiToken: required("EVALUATOR_API_TOKEN"),
   targetRepo,

@@ -1,5 +1,6 @@
 import express from "express";
 import { config, webhookUrl } from "./config.js";
+import { createGitHubAppReadToken } from "./githubApp.js";
 import { ensureWebhook, getCard, getCardComments, getWorkflowListIds, resolveBoardId, commentOnCard, type TrelloCard } from "./trello/client.js";
 import { verifyTrelloSignature } from "./trello/webhookVerify.js";
 import { handleCardFreezeRevocation, handleCardPrioritized, handleCardReadyForAgent, handleCardReviewForAgent, handleCardSpecAndDesign } from "./workflow/workflow.js";
@@ -117,6 +118,7 @@ app.post("/webhooks/trello", async (req, res) => {
             .filter((value): value is { definition: string; record: unknown } => value?.definition === "SpecAcceptanceRecord");
           let accepted = false;
           let acceptedRecord: Record<string, unknown> | null = null;
+          let acceptedFreezeActivation: Record<string, unknown> | null = null;
           let acceptedWorkspaceRef = "";
           let acceptedTargetCommit = "";
           let rejection = "No SpecAcceptanceRecord comment was found.";
@@ -143,6 +145,12 @@ app.post("/webhooks/trello", async (req, res) => {
               const target = (invocation as Record<string, unknown>).target as Record<string, unknown>;
               if (invocationItem.trello_card_id !== card.id || invocationItem.intent_id !== freeze?.tuple.intentId) continue;
               foundStageOutput = true;
+              const productRepositoryReadToken = await createGitHubAppReadToken({
+                appId: config.orchestratorGithubAppId,
+                installationId: config.orchestratorGithubAppInstallationId,
+                privateKeyFile: config.orchestratorGithubAppPrivateKeyFile,
+                repositoryUrl: productConfig.target_repository,
+              });
               const issues = await validateSpecAcceptanceRecord({
                 card,
                 actorId: transition.actor_id,
@@ -154,12 +162,13 @@ app.post("/webhooks/trello", async (req, res) => {
                 expectedTargetCommit: String(target.commit_sha ?? ""),
                 githubApiBase: config.intentBacklogApiBase,
                 intentBacklogReadToken: config.intentBacklogReadToken,
-                productRepositoryReadToken: config.orchestratorGithubAppReadToken,
+                productRepositoryReadToken,
                 resolveIntent: resolveSpecRequest,
               });
               if (issues.length === 0) {
                 accepted = true;
                 acceptedRecord = candidate.record as Record<string, unknown>;
+                acceptedFreezeActivation = (invocation as Record<string, unknown>).freeze_activation as Record<string, unknown>;
                 acceptedWorkspaceRef = String((invocation as Record<string, unknown>).workspace_ref);
                 acceptedTargetCommit = String(target.commit_sha);
                 break;
@@ -173,7 +182,7 @@ app.post("/webhooks/trello", async (req, res) => {
             await commentOnCard(card.id, `Execution was not started: ${rejection}`);
             return;
           }
-          handleCardReadyForAgent(card.id, acceptedRecord!, acceptedWorkspaceRef, acceptedTargetCommit);
+          handleCardReadyForAgent(card.id, acceptedRecord!, acceptedWorkspaceRef, acceptedTargetCommit, acceptedFreezeActivation!);
           return;
           }
         case "start_evaluation":

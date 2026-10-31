@@ -11,9 +11,8 @@ test("buildDockerArgs bind-mounts the workspace and mirrors the compose hardenin
     inputSnapshotPath: "C:\\Repos\\agentic-sdlc-workspaces\\INT-MF-0042\\.agent\\inputs\\invoke-1",
     invocationId: "invoke-1",
     provider: "claude",
-    envFile: "C:\\Repos\\spec-design-agent\\.runtime.env",
+    envFile: "C:\\Repos\\.config\\spec-design-agent\\runtime.env",
     containerName: "spec-design-run-1",
-    githubAppWriteToken: "app-installation-token-test-value",
   });
 
   assert.equal(args[0], "run");
@@ -32,24 +31,20 @@ test("buildDockerArgs bind-mounts the workspace and mirrors the compose hardenin
   assert.ok(args.includes("HOME=/tmp"));
   assert.ok(args.includes("SPEC_AGENT_PROVIDER=claude"));
   // Without safe.directory git refuses the bind-mounted repo as a non-root uid.
-  assert.ok(args.includes("GIT_CONFIG_COUNT=4"));
+  assert.ok(args.includes("GIT_CONFIG_COUNT=3"));
   assert.ok(args.includes("GIT_CONFIG_KEY_0=safe.directory"));
   assert.ok(args.includes(`GIT_CONFIG_VALUE_0=${CONTAINER_WORKSPACE}`));
   assert.ok(args.includes("GIT_CONFIG_KEY_1=user.email"));
   assert.ok(args.includes("GIT_CONFIG_KEY_2=user.name"));
-  assert.ok(args.includes("GIT_CONFIG_KEY_3=credential.helper"));
-  // The token reaches the container by pass-through and must never be in argv.
-  assert.ok(args.includes("SPEC_AGENT_GITHUB_TOKEN"), "expected the pass-through form `-e SPEC_AGENT_GITHUB_TOKEN`");
-  assert.ok(!args.some((a) => a.includes("app-installation-token-test-value")), "the token must not appear in the command line");
   assert.equal(args[args.indexOf("--security-opt") + 1], "no-new-privileges:true");
   assert.equal(args[args.indexOf("--cap-drop") + 1], "ALL");
-  assert.equal(args[args.indexOf("--env-file") + 1], "C:\\Repos\\spec-design-agent\\.runtime.env");
+  assert.equal(args[args.indexOf("--env-file") + 1], "C:\\Repos\\.config\\spec-design-agent\\runtime.env");
   assert.equal(args[args.indexOf("--name") + 1], "spec-design-run-1");
   // The image must be the last element: the CLI subcommand is appended after it.
   assert.equal(args[args.length - 1], "spec-design-agent:local");
 });
 
-test("buildDockerArgs omits --env-file, --name, and credentials when not supplied", () => {
+test("buildDockerArgs does not read or inject agent credentials", () => {
   const args = buildDockerArgs({
     docker: ["docker"],
     image: "img",
@@ -58,9 +53,7 @@ test("buildDockerArgs omits --env-file, --name, and credentials when not supplie
   });
   assert.ok(!args.includes("--env-file"));
   assert.ok(!args.includes("--name"));
-  // No token: no credential helper, and the count must still match the keys.
   assert.ok(args.includes("GIT_CONFIG_COUNT=3"));
-  assert.ok(!args.includes("GIT_CONFIG_KEY_3=credential.helper"));
   assert.ok(!args.includes("SPEC_AGENT_GITHUB_TOKEN"));
   assert.equal(args[args.length - 1], "img");
 });

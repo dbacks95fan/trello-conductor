@@ -1,7 +1,7 @@
-// ABOUTME: Locates the workspace-level runtime environment file shared outside project repositories.
+// ABOUTME: Locates the Orchestrator's runtime environment file outside project repositories.
 import { resolve } from "node:path";
 
-// ABOUTME: Keeps credentials out of project repositories while allowing local services to share them.
+// ABOUTME: Keeps the Orchestrator's credentials separate from other agent runtimes.
 export function defaultRuntimeSecretsFile(projectDirectory: string = process.cwd()): string {
-  return resolve(projectDirectory, "..", ".config", "agentic-sdlc", "runtime.env");
+  return resolve(projectDirectory, "..", ".config", "orchestrator", "runtime.env");
 }

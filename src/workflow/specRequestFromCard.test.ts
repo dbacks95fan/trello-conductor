@@ -167,7 +167,7 @@ test("resolveSpecRequest sends bearer auth and pins the ref to the card commit",
 
   await resolveSpecRequest(card(description()), { ...baseOptions, intentBacklogReadToken: "read-only-intent-token", fetchFn });
   assert.match(seenUrl, /\/repos\/dbacks95fan\/intent-backlog\/contents\/products\/mealflow\/intents\/INT-MF-0042\/intent\.md\?ref=a{40}$/);
-  assert.equal(seenAuth, "Bearer ghp_x");
+  assert.equal(seenAuth, "Bearer read-only-intent-token");
 });
 
 test("resolveSpecRequest fails when the card and the canonical intent disagree", async () => {

@@ -1,18 +1,32 @@
-// ABOUTME: Sends immutable Git handoff metadata to the authenticated evaluator service.
+// ABOUTME: Sends pinned artifact bytes and Git references to the authenticated Evaluator service.
 export interface RemoteEvaluatorRequest {
   endpoint: string;
   token: string;
   repositoryUrl: string;
+  branch: string;
   revision: string;
-  workItem: string;
-  intentPath: string;
-  contractPath: string;
-  evidencePath: string;
+  branchRevision: string;
+  workItem: Record<string, unknown>;
+  intentRef: Record<string, unknown>;
+  contractRef: Record<string, unknown>;
+  evidenceRef: Record<string, unknown>;
+  contractText: string;
+  evidenceText: string;
+  intentText: string;
+  packagePath: string;
 }
 
 export interface RemoteEvaluatorResult {
   exitCode: number;
   evaluation: Record<string, unknown> | null;
+  evaluationPackage: {
+    repositoryUrl: string;
+    branch: string;
+    candidateRevision: string;
+    packageRevision: string;
+    path: string;
+    sha256: string;
+  } | null;
   rawOutput: string;
 }
 
@@ -31,11 +45,17 @@ export async function runRemoteEvaluator(
     },
     body: JSON.stringify({
       repositoryUrl: request.repositoryUrl,
+      branch: request.branch,
       revision: request.revision,
+      branchRevision: request.branchRevision,
       workItem: request.workItem,
-      intentPath: request.intentPath,
-      contractPath: request.contractPath,
-      evidencePath: request.evidencePath,
+      intentRef: request.intentRef,
+      contractRef: request.contractRef,
+      evidenceRef: request.evidenceRef,
+      contractText: request.contractText,
+      evidenceText: request.evidenceText,
+      intentText: request.intentText,
+      packagePath: request.packagePath,
     }),
   }));
   const body = await response.text();
@@ -45,8 +65,13 @@ export async function runRemoteEvaluator(
   try {
     parsed = JSON.parse(body);
   } catch {
-    return { exitCode: 1, evaluation: null, rawOutput: body };
+    return { exitCode: 1, evaluation: null, evaluationPackage: null, rawOutput: body };
   }
-  const evaluation = typeof parsed === "string" ? JSON.parse(parsed) as Record<string, unknown> : parsed as Record<string, unknown>;
-  return { exitCode: 0, evaluation, rawOutput: body };
+  const envelope = typeof parsed === "string" ? JSON.parse(parsed) as Record<string, unknown> : parsed as Record<string, unknown>;
+  const evaluation = envelope.evaluation && typeof envelope.evaluation === "object" ? envelope.evaluation as Record<string, unknown> : null;
+  const rawPackage = envelope.evaluationPackage && typeof envelope.evaluationPackage === "object" ? envelope.evaluationPackage as Record<string, unknown> : null;
+  const evaluationPackage = rawPackage && typeof rawPackage.repositoryUrl === "string" && typeof rawPackage.branch === "string" && typeof rawPackage.candidateRevision === "string" && typeof rawPackage.packageRevision === "string" && typeof rawPackage.path === "string" && typeof rawPackage.sha256 === "string"
+    ? rawPackage as RemoteEvaluatorResult["evaluationPackage"]
+    : null;
+  return { exitCode: evaluation && evaluationPackage ? 0 : 1, evaluation, evaluationPackage, rawOutput: body };
 }

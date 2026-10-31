@@ -1,6 +1,7 @@
 // Copyright (c) 2026 DPSystems, LLC.
 // ABOUTME: Revalidates Spec Acceptance and builds the Coding Agent contract from canonical v3 artifacts.
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -18,6 +19,7 @@ const execFileAsync = promisify(execFile);
 
 export interface AcceptedExecutionContract {
   workContract: WorkContract;
+  invocation: Record<string, unknown>;
   repositoryPath: string;
   baseBranch: string;
 }
@@ -30,7 +32,8 @@ export interface AcceptedExecutionOptions {
   workspaceRoot: string;
   intentBacklogApiBase: string;
   intentBacklogReadToken: string;
-  productRepositoryReadToken: string;
+  createProductRepositoryReadToken: (repositoryUrl: string) => Promise<string>;
+  freezeActivation: Record<string, unknown>;
   validator: LifecycleValidator;
   fetchFn?: typeof fetch;
   targetRepositoryUrl?: string;
@@ -59,6 +62,7 @@ export async function loadAcceptedExecutionContract(options: AcceptedExecutionOp
   if (!resolved.productConfig.authorized_product_owner_ids.includes(String(acceptance.authorized_by))) {
     throw new Error("The SpecAcceptanceRecord author is not an authorized product owner.");
   }
+  const productRepositoryReadToken = await options.createProductRepositoryReadToken(resolved.productConfig.target_repository);
   if (
     resolved.intentCommit !== freeze.tuple.intentCommit || frozenArtifactSha256(resolved.frozenIntentBytes) !== freeze.tuple.intentSha256 ||
     resolved.policyProfileId !== freeze.tuple.policyProfileId || resolved.policyProfileVersion !== freeze.tuple.policyProfileVersion ||
@@ -68,8 +72,8 @@ export async function loadAcceptedExecutionContract(options: AcceptedExecutionOp
   if (options.workspaceRef !== `work/${resolved.intentId}`) throw new Error("The accepted Spec & Design invocation does not target the expected work branch.");
   const repositoryPath = join(options.workspaceRoot, resolved.intentId);
   const [specText, contractText] = await Promise.all([
-    readArtifactRef(acceptance.spec as Record<string, unknown>, options.intentBacklogApiBase, options.productRepositoryReadToken, options.fetchFn),
-    readArtifactRef(acceptance.work_contract as Record<string, unknown>, options.intentBacklogApiBase, options.productRepositoryReadToken, options.fetchFn),
+    readArtifactRef(acceptance.spec as Record<string, unknown>, options.intentBacklogApiBase, productRepositoryReadToken, options.fetchFn),
+    readArtifactRef(acceptance.work_contract as Record<string, unknown>, options.intentBacklogApiBase, productRepositoryReadToken, options.fetchFn),
   ]);
   if (String((acceptance.spec as Record<string, unknown>).repository) !== String((acceptance.work_contract as Record<string, unknown>).repository) ||
       String((acceptance.spec as Record<string, unknown>).commit_sha) !== String((acceptance.work_contract as Record<string, unknown>).commit_sha)) {
@@ -118,5 +122,21 @@ export async function loadAcceptedExecutionContract(options: AcceptedExecutionOp
     expected,
     validator,
   });
-  return { workContract, repositoryPath, baseBranch: options.workspaceRef };
+  if (branchHead.trim() !== specCommit.trim()) throw new Error("The accepted Spec & Design branch moved after the human accepted its artifacts.");
+  const invocation = {
+    schema_version: "1.1",
+    invocation_id: randomUUID(),
+    trigger_event_id: randomUUID(),
+    stage: "execution",
+    work_item: acceptance.work_item,
+    freeze_activation: options.freezeActivation,
+    input_artifacts: [acceptance.spec, acceptance.work_contract],
+    target: { repository: expected.targetRepository, commit_sha: branchHead.trim() },
+    workspace_ref: options.workspaceRef,
+    read_paths: ["."],
+    write_paths: ["."],
+  };
+  const invocationValidation = validator.validate("StageInvocation", invocation);
+  if (!invocationValidation.valid) throw new Error(`Execution StageInvocation is invalid: ${invocationValidation.errors.join("; ")}`);
+  return { workContract, invocation, repositoryPath, baseBranch: options.workspaceRef };
 }

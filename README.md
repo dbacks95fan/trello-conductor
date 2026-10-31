@@ -20,8 +20,8 @@ for any product board, but simultaneous multi-board processing is not supported.
 | Backlog → Prioritized | Validate the pinned intent/profile and product-owner ID; record schema-valid freeze activation data and the current projection. |
 | Prioritized → Spec & Design | Verify the active freeze, record a StageInvocation, and invoke Spec & Design. Only a schema-valid Work Contract v3 bound to frozen inputs can be reported ready for human review. |
 | Spec & Design → Execution | Require a product-owner `SpecAcceptanceRecord`; retrieve the referenced spec and Work Contract from GitHub, verify hashes, and validate Work Contract v3 against the active freeze. |
-| Execution → Evaluation | Run the existing Coding Agent and Evaluator adapters. Their current contract boundary is legacy and is not yet compliant with canonical Work Contract v3. |
-| Evaluation → Human Approval | The existing Evaluator pass can move the card to Human Approval. The accountable human still decides whether to proceed. |
+| Execution -> Evaluation | Send StageInvocation 1.1 to Coding, validate its StageResult and Evidence Package, then give Evaluator immutable refs and exact artifact bytes. |
+| Evaluation -> Human Approval | Require the Evaluator result and published Evaluation Package reference before moving a passing item to Human Approval. The accountable human still decides whether to proceed. |
 
 Returning a card from Prioritized or Spec & Design to Backlog or New Ideas
 revokes its active freeze while preserving the event history. The webhook
@@ -220,32 +220,36 @@ subscription — idempotent, safe to restart.
 
 Set `EVALUATOR_API_URL` to the NAS evaluator address and `EVALUATOR_API_TOKEN`
 to the same bearer token configured by the evaluator. Store the bearer token in
-the shared workspace `C:\Repos\.config\agentic-sdlc\runtime.env` file, not in a
+the Orchestrator's `C:\Repos\.config\orchestrator\runtime.env` file, not in a
 repository. Set `ORCHESTRATOR_SECRETS_FILE` only if you use another location.
-The evaluator deployment
-must set `EVALUATOR_ALLOWED_REPOSITORY_URL` to the candidate repository’s HTTPS
-`origin` URL. If that repository is private, configure a read-only GitHub
-credential in the NAS runtime environment. Do not store credentials in this
-repository.
-
+The Orchestrator runtime file also needs `ORCHESTRATOR_GITHUB_APP_ID`,
+`ORCHESTRATOR_GITHUB_APP_INSTALLATION_ID`, and
+`ORCHESTRATOR_GITHUB_APP_PRIVATE_KEY_FILE`. Keep the private key in the
+Orchestrator's external config directory. The Orchestrator mints a repository-
+scoped read token when it fetches product artifacts. Keep
+`INTENT_BACKLOG_READ_TOKEN` for the private intent-backlog repository only.
+The Evaluator runtime file needs `EVALUATOR_ALLOWED_REPOSITORY_URLS` and its
+own GitHub App ID, installation ID, and private-key path. Evaluator mints a
+read-only token for checkout and a separate write token only to publish the
+Evaluation Package on the assigned work branch.
 For the Spec & Design trigger, build and deploy the agent image on this host from
 the [spec-design-agent](https://github.com/dbacks95fan/spec-design-agent) repo:
 
 ```
 cd ../spec-design-agent
-cp .env.example .runtime.env   # fill in ANTHROPIC_API_KEY for the claude provider
+New-Item -ItemType Directory -Force C:\Repos\.config\spec-design-agent | Out-Null
+Copy-Item .env.example C:\Repos\.config\spec-design-agent\runtime.env
+# Fill in the provider key and the Spec Agent's GitHub App credential in that external file.
 docker compose build           # tags spec-design-agent:local
 ```
 
-Then in the orchestrator: point `SPEC_DESIGN_AGENT_IMAGE` at that tag (it is the
-default), point `SPEC_DESIGN_AGENT_RUNTIME_ENV` at the `.runtime.env` you just
-created (also the default), and provide role-scoped credentials in the shared
-runtime file. Use `INTENT_BACKLOG_READ_TOKEN` to read frozen intent snapshots;
-the intent-creation skill uses `INTENT_BACKLOG_WRITE_TOKEN` for backlog updates.
-Provide product-repository GitHub App installation tokens as
-`ORCHESTRATOR_GITHUB_APP_READ_TOKEN`, `SPEC_DESIGN_GITHUB_APP_WRITE_TOKEN`, and
-`EVALUATOR_GITHUB_APP_WRITE_TOKEN`. Provision the full canonical board lifecycle
-with the command below rather than adding individual lists by hand.
+Then in the Orchestrator, keep its own settings and secrets in
+`C:\Repos\.config\orchestrator\runtime.env`. Keep the Spec & Design Agent's
+provider key and product-repository GitHub App credential in its separate file,
+`C:\Repos\.config\spec-design-agent\runtime.env`; that file is passed directly
+to the agent runtime. Use `INTENT_BACKLOG_READ_TOKEN` only for the private
+intent-backlog repository. Provision the full canonical board lifecycle with
+the command below rather than adding individual lists by hand.
 
 ## Board provisioning
 

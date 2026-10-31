@@ -1,5 +1,5 @@
 // Copyright (c) 2026 DPSystems, LLC.
-// ABOUTME: Exercises frozen acceptance through canonical v3 validation and Coding Agent v2 adaptation.
+// ABOUTME: Exercises frozen acceptance through canonical v3 validation and StageInvocation construction.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -122,9 +122,18 @@ test("loads accepted immutable artifacts and adapts them against the accepted wo
       return new Response("Not Found", { status: 404 });
     };
 
+    const freezeActivation = {
+      schema_version: "1.0", event_id: "freeze-event-1", event_type: "activated",
+      work_item: { product_id: "MF", intent_id: intentId, intent_version: 3, trello_card_id: "card-1" },
+      intent: { repository: backlogUrl, commit_sha: intentCommit, path: `products/mealflow/intents/${intentId}/intent.md`, sha256: digest(frozenIntent) },
+      policy_profile_id: "MF-DEFAULT", policy_profile_version: "1",
+      policy_profile: { repository: backlogUrl, commit_sha: intentCommit, path: "products/mealflow/policy-profiles/default.md", sha256: digest(profile) },
+      authorized_by: "owner-1", recorded_at: "2026-10-27T11:00:00.000Z",
+    };
     const result = await loadAcceptedExecutionContract({
       card, acceptance: record, workspaceRef, targetCommit: baseCommit, workspaceRoot,
-      intentBacklogApiBase: "https://api.github.com", intentBacklogReadToken: "", productRepositoryReadToken: "", validator: createLifecycleValidator(config.lifecycleSchemaPath),
+      intentBacklogApiBase: "https://api.github.com", intentBacklogReadToken: "", createProductRepositoryReadToken: async () => "test-product-read-token", validator: createLifecycleValidator(config.lifecycleSchemaPath),
+      freezeActivation,
       fetchFn, targetRepositoryUrl: productUrl,
     });
     assert.equal(result.workContract.schema_version, 2);
@@ -132,6 +141,9 @@ test("loads accepted immutable artifacts and adapts them against the accepted wo
     assert.equal(result.workContract.objective, "A person can create a weekly meal plan.");
     assert.equal(result.repositoryPath, repositoryPath);
     assert.equal(result.baseBranch, workspaceRef);
+    assert.equal(result.invocation.schema_version, "1.1");
+    assert.equal(result.invocation.stage, "execution");
+    assert.equal((result.invocation.target as Record<string, unknown>).commit_sha, artifactCommit);
   } finally {
     rmSync(workspaceRoot, { recursive: true, force: true });
   }
