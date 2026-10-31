@@ -46,10 +46,12 @@ export const config = {
   specDesignRuntimeEnvFile:
     process.env.SPEC_DESIGN_AGENT_RUNTIME_ENV ?? resolve(targetRepo, "..", "spec-design-agent", ".runtime.env"),
   specDesignTimeoutMs: Number(process.env.SPEC_DESIGN_AGENT_TIMEOUT_MS ?? "900000"),
-  // Token git inside the container uses to reach GitHub. Defaults to the
-  // orchestrator's own token; set SPEC_DESIGN_GITHUB_TOKEN to hand the agent a
-  // narrower, read-only credential than the one the Orchestrator pushes with.
-  specDesignGithubToken: process.env.SPEC_DESIGN_GITHUB_TOKEN ?? process.env.GITHUB_TOKEN ?? "",
+  // Role-scoped credentials. Intent-backlog access tokens are separate from
+  // GitHub App installation tokens for product-code repositories.
+  intentBacklogReadToken: process.env.INTENT_BACKLOG_READ_TOKEN ?? "",
+  orchestratorGithubAppReadToken: process.env.ORCHESTRATOR_GITHUB_APP_READ_TOKEN ?? "",
+  specDesignGithubAppWriteToken: process.env.SPEC_DESIGN_GITHUB_APP_WRITE_TOKEN ?? "",
+  evaluatorGithubAppWriteToken: process.env.EVALUATOR_GITHUB_APP_WRITE_TOKEN ?? "",
   evaluatorApiUrl: required("EVALUATOR_API_URL"),
   evaluatorApiToken: required("EVALUATOR_API_TOKEN"),
   targetRepo,
@@ -57,7 +59,6 @@ export const config = {
   // into the container at /work.
   specWorkspaceRoot: process.env.SPEC_WORKSPACE_ROOT ?? resolve(targetRepo, "..", "agentic-sdlc-workspaces"),
   intentBacklogApiBase: process.env.INTENT_BACKLOG_API_BASE ?? "https://api.github.com",
-  githubToken: process.env.GITHUB_TOKEN ?? "",
   callbackUrl: required("CALLBACK_URL"),
   port: Number(process.env.PORT ?? "8787"),
 };

@@ -78,7 +78,7 @@ function stubFetch(body: string, init: ResponseInit = { status: 200 }): typeof f
 
 const baseOptions = {
   githubApiBase: "https://api.github.com",
-  githubToken: "",
+  intentBacklogReadToken: "",
   approvedBy: "Sobe",
   approvedAt: "2026-09-06T09:00:00.000Z",
   targetRepositoryUrl: "https://github.com/example/mealflow",
@@ -165,7 +165,7 @@ test("resolveSpecRequest sends bearer auth and pins the ref to the card commit",
     return stubFetch(intentMarkdown())(url, init);
   }) as unknown as typeof fetch;
 
-  await resolveSpecRequest(card(description()), { ...baseOptions, githubToken: "ghp_x", fetchFn });
+  await resolveSpecRequest(card(description()), { ...baseOptions, intentBacklogReadToken: "read-only-intent-token", fetchFn });
   assert.match(seenUrl, /\/repos\/dbacks95fan\/intent-backlog\/contents\/products\/mealflow\/intents\/INT-MF-0042\/intent\.md\?ref=a{40}$/);
   assert.equal(seenAuth, "Bearer ghp_x");
 });
@@ -194,7 +194,7 @@ test("resolveSpecRequest warns but proceeds on a self-referential commit field",
 test("resolveSpecRequest surfaces a GitHub fetch failure as a SpecRequestError", async () => {
   await assert.rejects(
     resolveSpecRequest(card(description()), { ...baseOptions, fetchFn: stubFetch("Not Found", { status: 404 }) }),
-    (err: Error) => err instanceof SpecRequestError && /HTTP 404/.test(err.message) && /GITHUB_TOKEN/.test(err.message),
+    (err: Error) => err instanceof SpecRequestError && /HTTP 404/.test(err.message) && /INTENT_BACKLOG_READ_TOKEN/.test(err.message),
   );
 });
 

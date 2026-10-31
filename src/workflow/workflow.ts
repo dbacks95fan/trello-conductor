@@ -116,7 +116,8 @@ async function processCard(execution: AcceptedExecution): Promise<void> {
       targetCommit: execution.targetCommit,
       workspaceRoot: config.specWorkspaceRoot,
       intentBacklogApiBase: config.intentBacklogApiBase,
-      githubToken: config.githubToken,
+      intentBacklogReadToken: config.intentBacklogReadToken,
+      productRepositoryReadToken: config.orchestratorGithubAppReadToken,
       validator: lifecycleValidator,
     });
     contract = loaded.workContract;
@@ -168,6 +169,7 @@ async function processCard(execution: AcceptedExecution): Promise<void> {
     intentPath: contract.intent.path,
     contractText: stringify(contract),
     evidencePath: join(repositoryPath, ".agent", "evidence", `${workItem}-${runId}.json`),
+    githubAppWriteToken: config.evaluatorGithubAppWriteToken,
   });
   const handoffComment = JSON.stringify(handoff);
   await commentOnCard(cardId, `${handoffMarker}${handoffComment} -->\n🔎 Independent evaluation is ready from Git revision \`${handoff.revision}\`. Moving this card to ${getWorkflowStageLabel("evaluation")} starts the Evaluator Agent.`);
@@ -276,7 +278,7 @@ async function resolveTargetBaseCommit(repositoryUrl: string): Promise<string> {
     "X-GitHub-Api-Version": "2022-11-28",
     "User-Agent": "trello-orchestrator",
   };
-  if (config.githubToken) headers.Authorization = `Bearer ${config.githubToken}`;
+  if (config.orchestratorGithubAppReadToken) headers.Authorization = `Bearer ${config.orchestratorGithubAppReadToken}`;
   const repositoryApi = `${config.intentBacklogApiBase.replace(/\/$/, "")}/repos/${match[1]}/${match[2]}`;
   const repositoryResponse = await fetch(repositoryApi, { headers });
   if (!repositoryResponse.ok) throw new Error(`GitHub returned HTTP ${repositoryResponse.status} while resolving the product repository default branch.`);
@@ -311,7 +313,7 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
   try {
     resolved = await resolveSpecRequest(card, {
       githubApiBase: config.intentBacklogApiBase,
-      githubToken: config.githubToken,
+      intentBacklogReadToken: config.intentBacklogReadToken,
       approvedBy: activeFreeze.tuple.authorizedBy,
       approvedAt: activeFreeze.tuple.frozenAt,
     });
@@ -525,7 +527,7 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
   await commentOnCard(cardId, route.comment);
 
   if (route.comment.includes("spec ready for human review")) {
-    const published = await verifySpecBranchPublished({ ...workspace, path: workspace.repositoryPath }, config.githubToken);
+    const published = await verifySpecBranchPublished({ ...workspace, path: workspace.repositoryPath }, config.orchestratorGithubAppReadToken);
     await commentOnCard(
       cardId,
       published.pushed
@@ -545,7 +547,7 @@ export async function handleCardPrioritized(cardId: string, approval: MoveApprov
   try {
     const resolved = await resolveSpecRequest(card, {
       githubApiBase: config.intentBacklogApiBase,
-      githubToken: config.githubToken,
+      intentBacklogReadToken: config.intentBacklogReadToken,
       approvedBy: approval.approvedBy,
       approvedAt: approval.approvedAt,
     });

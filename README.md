@@ -123,11 +123,11 @@ engineering-stage handler for that work item:
    Setting them by environment avoids needing a writable `HOME` or rootfs. A `-c`
    flag from the agent still takes precedence.
 
-   When a token is configured, a fourth entry adds a `credential.helper` so git
-   inside the container can reach GitHub. The token is passed by environment
-   pass-through (`-e GITHUB_TOKEN`, no `=value`), so it never appears in argv,
-   `docker inspect`, or the process list. Network egress and CA trust already
-   work in the image; credentials were the only missing piece.
+   The Spec & Design Agent receives a product-repository GitHub App installation
+   token as `SPEC_AGENT_GITHUB_TOKEN`. The token value is not in Docker's command
+   arguments, but it is present in the container environment and can be inspected
+   by principals with Docker daemon access. Restrict daemon access accordingly.
+   The token needs write permission because the agent creates and publishes its branch.
 5. It routes on the agent's result (`src/workflow/specRouting.ts`):
    `spec_ready` → publish a branch link for human review and leave the card in
    Spec & Design;
@@ -239,10 +239,13 @@ docker compose build           # tags spec-design-agent:local
 
 Then in the orchestrator: point `SPEC_DESIGN_AGENT_IMAGE` at that tag (it is the
 default), point `SPEC_DESIGN_AGENT_RUNTIME_ENV` at the `.runtime.env` you just
-created (also the default), and put a `GITHUB_TOKEN` with read access to the
-private `intent-backlog` repository in the shared runtime file. Provision the
-full canonical board lifecycle with the command below rather than adding
-individual lists by hand.
+created (also the default), and provide role-scoped credentials in the shared
+runtime file. Use `INTENT_BACKLOG_READ_TOKEN` to read frozen intent snapshots;
+the intent-creation skill uses `INTENT_BACKLOG_WRITE_TOKEN` for backlog updates.
+Provide product-repository GitHub App installation tokens as
+`ORCHESTRATOR_GITHUB_APP_READ_TOKEN`, `SPEC_DESIGN_GITHUB_APP_WRITE_TOKEN`, and
+`EVALUATOR_GITHUB_APP_WRITE_TOKEN`. Provision the full canonical board lifecycle
+with the command below rather than adding individual lists by hand.
 
 ## Board provisioning
 

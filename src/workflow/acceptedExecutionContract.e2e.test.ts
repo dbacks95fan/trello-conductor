@@ -124,7 +124,7 @@ test("loads accepted immutable artifacts and adapts them against the accepted wo
 
     const result = await loadAcceptedExecutionContract({
       card, acceptance: record, workspaceRef, targetCommit: baseCommit, workspaceRoot,
-      intentBacklogApiBase: "https://api.github.com", githubToken: "", validator: createLifecycleValidator(config.lifecycleSchemaPath),
+      intentBacklogApiBase: "https://api.github.com", intentBacklogReadToken: "", productRepositoryReadToken: "", validator: createLifecycleValidator(config.lifecycleSchemaPath),
       fetchFn, targetRepositoryUrl: productUrl,
     });
     assert.equal(result.workContract.schema_version, 2);

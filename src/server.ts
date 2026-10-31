@@ -81,7 +81,7 @@ app.post("/webhooks/trello", async (req, res) => {
     getProductConfig: async (card: TrelloCard) => {
       const resolved = await resolveSpecRequest(card, {
         githubApiBase: config.intentBacklogApiBase,
-        githubToken: config.githubToken,
+        intentBacklogReadToken: config.intentBacklogReadToken,
         approvedBy: event.actor_id,
         approvedAt: event.occurred_at,
       });
@@ -105,7 +105,7 @@ app.post("/webhooks/trello", async (req, res) => {
           const productConfig = await (async () => {
             const resolved = await resolveSpecRequest(card, {
               githubApiBase: config.intentBacklogApiBase,
-              githubToken: config.githubToken,
+              intentBacklogReadToken: config.intentBacklogReadToken,
               approvedBy: transition.actor_id,
               approvedAt: transition.occurred_at,
             });
@@ -153,7 +153,8 @@ app.post("/webhooks/trello", async (req, res) => {
                 expectedWorkContract,
                 expectedTargetCommit: String(target.commit_sha ?? ""),
                 githubApiBase: config.intentBacklogApiBase,
-                githubToken: config.githubToken,
+                intentBacklogReadToken: config.intentBacklogReadToken,
+                productRepositoryReadToken: config.orchestratorGithubAppReadToken,
                 resolveIntent: resolveSpecRequest,
               });
               if (issues.length === 0) {

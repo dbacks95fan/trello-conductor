@@ -29,7 +29,8 @@ export interface AcceptedExecutionOptions {
   targetCommit: string;
   workspaceRoot: string;
   intentBacklogApiBase: string;
-  githubToken: string;
+  intentBacklogReadToken: string;
+  productRepositoryReadToken: string;
   validator: LifecycleValidator;
   fetchFn?: typeof fetch;
   targetRepositoryUrl?: string;
@@ -49,7 +50,7 @@ export async function loadAcceptedExecutionContract(options: AcceptedExecutionOp
 
   const resolved = await resolveSpecRequest(card, {
     githubApiBase: options.intentBacklogApiBase,
-    githubToken: options.githubToken,
+    intentBacklogReadToken: options.intentBacklogReadToken,
     approvedBy: String(acceptance.authorized_by),
     approvedAt: String(acceptance.recorded_at),
     fetchFn: options.fetchFn,
@@ -67,8 +68,8 @@ export async function loadAcceptedExecutionContract(options: AcceptedExecutionOp
   if (options.workspaceRef !== `work/${resolved.intentId}`) throw new Error("The accepted Spec & Design invocation does not target the expected work branch.");
   const repositoryPath = join(options.workspaceRoot, resolved.intentId);
   const [specText, contractText] = await Promise.all([
-    readArtifactRef(acceptance.spec as Record<string, unknown>, options.intentBacklogApiBase, options.githubToken, options.fetchFn),
-    readArtifactRef(acceptance.work_contract as Record<string, unknown>, options.intentBacklogApiBase, options.githubToken, options.fetchFn),
+    readArtifactRef(acceptance.spec as Record<string, unknown>, options.intentBacklogApiBase, options.productRepositoryReadToken, options.fetchFn),
+    readArtifactRef(acceptance.work_contract as Record<string, unknown>, options.intentBacklogApiBase, options.productRepositoryReadToken, options.fetchFn),
   ]);
   if (String((acceptance.spec as Record<string, unknown>).repository) !== String((acceptance.work_contract as Record<string, unknown>).repository) ||
       String((acceptance.spec as Record<string, unknown>).commit_sha) !== String((acceptance.work_contract as Record<string, unknown>).commit_sha)) {

@@ -13,6 +13,7 @@ export interface GitEvaluationHandoffInput {
   intentPath: string;
   contractText: string;
   evidencePath: string;
+  githubAppWriteToken: string;
 }
 
 export interface GitEvaluationHandoff {
@@ -24,8 +25,21 @@ export interface GitEvaluationHandoff {
 }
 
 // ABOUTME: Runs Git without a shell so work-item data cannot alter the command structure.
-async function git(args: string[], cwd: string): Promise<string> {
-  const { stdout } = await execFileAsync("git", args, { cwd, windowsHide: true });
+async function git(args: string[], cwd: string, githubAppWriteToken?: string): Promise<string> {
+  const env = githubAppWriteToken
+    ? {
+        ...process.env,
+        EVALUATOR_GITHUB_APP_WRITE_TOKEN: githubAppWriteToken,
+        GIT_CONFIG_COUNT: "3",
+        GIT_CONFIG_KEY_0: "credential.helper",
+        GIT_CONFIG_VALUE_0: "",
+        GIT_CONFIG_KEY_1: "credential.https://github.com.username",
+        GIT_CONFIG_VALUE_1: "x-access-token",
+        GIT_CONFIG_KEY_2: "credential.https://github.com.helper",
+        GIT_CONFIG_VALUE_2: '!f(){ echo username=x-access-token; echo "password=$EVALUATOR_GITHUB_APP_WRITE_TOKEN"; };f',
+      }
+    : process.env;
+  const { stdout } = await execFileAsync("git", args, { cwd, env, windowsHide: true });
   return stdout.trim();
 }
 
@@ -39,6 +53,7 @@ function repositoryPath(path: string): string {
 
 // ABOUTME: Stores the exact evaluation inputs with the candidate so a remote evaluator can reproduce the run.
 export async function prepareGitEvaluationHandoff(input: GitEvaluationHandoffInput): Promise<GitEvaluationHandoff> {
+  if (!input.githubAppWriteToken) throw new Error("Evaluator GitHub App write token is required to publish the Evaluation Package");
   const intentPath = repositoryPath(input.intentPath);
   const status = await git(["status", "--porcelain", "--untracked-files=all"], input.worktreePath);
   if (status) throw new Error("Candidate branch has uncommitted changes. The evaluator requires a clean, committed Git revision.");
@@ -59,7 +74,7 @@ export async function prepareGitEvaluationHandoff(input: GitEvaluationHandoffInp
 
   const revision = await git(["rev-parse", "HEAD"], worktree);
   const repositoryUrl = await git(["config", "--get", "remote.origin.url"], worktree);
-  if (!repositoryUrl.startsWith("https://")) throw new Error("Candidate remote.origin.url must use HTTPS so the NAS evaluator can retrieve the committed revision");
-  await git(["push", "--set-upstream", "origin", input.branch], worktree);
+  if (!/^https:\/\/github\.com\//i.test(repositoryUrl)) throw new Error("Candidate remote.origin.url must be a GitHub HTTPS URL so the scoped GitHub App token can publish the Evaluation Package");
+  await git(["push", "--set-upstream", "origin", input.branch], worktree, input.githubAppWriteToken);
   return { repositoryUrl, revision, intentPath, contractPath, evidencePath };
 }

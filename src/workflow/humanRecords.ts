@@ -56,7 +56,8 @@ export interface SpecAcceptanceValidationOptions {
   expectedWorkContract: Record<string, unknown>;
   expectedTargetCommit: string;
   githubApiBase: string;
-  githubToken: string;
+  intentBacklogReadToken: string;
+  productRepositoryReadToken: string;
   fetchFn?: typeof fetch;
   resolveIntent: typeof resolveSpecRequest;
 }
@@ -83,7 +84,7 @@ export async function validateSpecAcceptanceRecord(options: SpecAcceptanceValida
   const artifacts = [value.spec, value.work_contract] as Array<Record<string, unknown>>;
   let contents: string[];
   try {
-    contents = await Promise.all(artifacts.map((artifact) => readArtifactRef(artifact, options.githubApiBase, options.githubToken, options.fetchFn ?? fetch)));
+    contents = await Promise.all(artifacts.map((artifact) => readArtifactRef(artifact, options.githubApiBase, options.productRepositoryReadToken, options.fetchFn ?? fetch)));
   } catch (error) {
     return [error instanceof Error ? error.message : String(error)];
   }
@@ -97,7 +98,7 @@ export async function validateSpecAcceptanceRecord(options: SpecAcceptanceValida
   try {
     resolved = await options.resolveIntent(card, {
       githubApiBase: options.githubApiBase,
-      githubToken: options.githubToken,
+      intentBacklogReadToken: options.intentBacklogReadToken,
       approvedBy: actorId,
       approvedAt: String(value.recorded_at),
       fetchFn: options.fetchFn,

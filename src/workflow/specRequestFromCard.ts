@@ -62,7 +62,7 @@ export interface ResolvedSpecRequest {
 
 export interface ResolveSpecRequestOptions {
   githubApiBase: string;
-  githubToken: string;
+  intentBacklogReadToken: string;
   approvedBy: string;
   approvedAt: string;
   /** Test seam for an isolated local fixture; production reads targetRepo's Git origin. */
@@ -180,7 +180,7 @@ async function fetchFrozenIntent(
     "X-GitHub-Api-Version": "2022-11-28",
     "User-Agent": "trello-orchestrator",
   };
-  if (options.githubToken) headers.Authorization = `Bearer ${options.githubToken}`;
+  if (options.intentBacklogReadToken) headers.Authorization = `Bearer ${options.intentBacklogReadToken}`;
 
   const fetchFn = options.fetchFn ?? fetch;
   const response = await fetchFn(url, { headers });
@@ -188,7 +188,7 @@ async function fetchFrozenIntent(
     const body = await response.text().catch(() => "");
     const hint =
       response.status === 404 || response.status === 401 || response.status === 403
-        ? " If intent-backlog is private, set GITHUB_TOKEN in the shared runtime file."
+        ? " If intent-backlog is private, set INTENT_BACKLOG_READ_TOKEN in the shared runtime file."
         : ` ${body.slice(0, 200)}`;
     throw new SpecRequestError(
       `GitHub returned HTTP ${response.status} fetching the frozen intent ${location.owner}/${location.repo}@${ref.slice(0, 12)} ${location.path}.${hint}`,

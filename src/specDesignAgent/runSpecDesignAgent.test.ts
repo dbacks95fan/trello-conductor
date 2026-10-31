@@ -13,7 +13,7 @@ test("buildDockerArgs bind-mounts the workspace and mirrors the compose hardenin
     provider: "claude",
     envFile: "C:\\Repos\\spec-design-agent\\.runtime.env",
     containerName: "spec-design-run-1",
-    githubToken: "ghp_secret",
+    githubAppWriteToken: "app-installation-token-test-value",
   });
 
   assert.equal(args[0], "run");
@@ -39,8 +39,8 @@ test("buildDockerArgs bind-mounts the workspace and mirrors the compose hardenin
   assert.ok(args.includes("GIT_CONFIG_KEY_2=user.name"));
   assert.ok(args.includes("GIT_CONFIG_KEY_3=credential.helper"));
   // The token reaches the container by pass-through and must never be in argv.
-  assert.ok(args.includes("GITHUB_TOKEN"), "expected the pass-through form `-e GITHUB_TOKEN`");
-  assert.ok(!args.some((a) => a.includes("ghp_secret")), "the token must not appear in the command line");
+  assert.ok(args.includes("SPEC_AGENT_GITHUB_TOKEN"), "expected the pass-through form `-e SPEC_AGENT_GITHUB_TOKEN`");
+  assert.ok(!args.some((a) => a.includes("app-installation-token-test-value")), "the token must not appear in the command line");
   assert.equal(args[args.indexOf("--security-opt") + 1], "no-new-privileges:true");
   assert.equal(args[args.indexOf("--cap-drop") + 1], "ALL");
   assert.equal(args[args.indexOf("--env-file") + 1], "C:\\Repos\\spec-design-agent\\.runtime.env");
@@ -61,7 +61,7 @@ test("buildDockerArgs omits --env-file, --name, and credentials when not supplie
   // No token: no credential helper, and the count must still match the keys.
   assert.ok(args.includes("GIT_CONFIG_COUNT=3"));
   assert.ok(!args.includes("GIT_CONFIG_KEY_3=credential.helper"));
-  assert.ok(!args.includes("GITHUB_TOKEN"));
+  assert.ok(!args.includes("SPEC_AGENT_GITHUB_TOKEN"));
   assert.equal(args[args.length - 1], "img");
 });
 

@@ -66,7 +66,7 @@ export interface DockerRunSpec {
   envFile?: string | null;
   containerName?: string;
   /** When set, git inside the container can authenticate to GitHub. */
-  githubToken?: string;
+  githubAppWriteToken?: string;
 }
 
 /** Git refuses to operate on a bind-mounted repository whose owner differs from
@@ -84,14 +84,13 @@ const GIT_ENV: string[] = [
   "-e", "GIT_CONFIG_VALUE_2=Spec and Design Agent",
 ];
 
-/** Lets git in the container authenticate to GitHub. The helper resolves
- *  $GITHUB_TOKEN inside the container at call time, and the token itself is
- *  passed by environment pass-through (`-e GITHUB_TOKEN`, no `=value`) so it
- *  never appears in argv, in `docker inspect`, or in the process list. */
+/** Lets git in the container authenticate to GitHub. The token value is not
+ *  included in Docker's command-line arguments. It is present in the container
+ *  environment, so principals with Docker daemon access can inspect it. */
 const GIT_CREDENTIAL_ENV: string[] = [
   "-e", "GIT_CONFIG_KEY_3=credential.helper",
-  "-e", 'GIT_CONFIG_VALUE_3=!f(){ echo username=x-access-token; echo "password=$GITHUB_TOKEN"; };f',
-  "-e", "GITHUB_TOKEN",
+  "-e", 'GIT_CONFIG_VALUE_3=!f(){ echo username=x-access-token; echo "password=$SPEC_AGENT_GITHUB_TOKEN"; };f',
+  "-e", "SPEC_AGENT_GITHUB_TOKEN",
 ];
 
 /** Builds the `docker run` argv up to and including the image. Mirrors the
@@ -112,9 +111,9 @@ export function buildDockerArgs(spec: DockerRunSpec): string[] {
     "-e",
     `SPEC_AGENT_PROVIDER=${spec.provider}`,
     "-e",
-    `GIT_CONFIG_COUNT=${spec.githubToken ? 4 : 3}`,
+    `GIT_CONFIG_COUNT=${spec.githubAppWriteToken ? 4 : 3}`,
     ...GIT_ENV,
-    ...(spec.githubToken ? GIT_CREDENTIAL_ENV : []),
+    ...(spec.githubAppWriteToken ? GIT_CREDENTIAL_ENV : []),
     "--security-opt",
     "no-new-privileges:true",
     "--cap-drop",
@@ -159,7 +158,7 @@ export interface RunSpecDesignAgentOptions {
   /** `null` omits `--env-file` entirely; omitted falls back to configuration. */
   envFile?: string | null;
   /** `null` withholds GitHub credentials; omitted falls back to configuration. */
-  githubToken?: string | null;
+  githubAppWriteToken?: string | null;
   timeoutMs?: number;
   runtime?: "docker" | "local";
   localCommand?: string[];
@@ -181,7 +180,7 @@ export async function runSpecDesignAgent(
   const docker = options.docker ?? [config.specDesignDockerBin];
   const image = options.image ?? config.specDesignImage;
   const envFile = options.envFile === undefined ? config.specDesignRuntimeEnvFile : options.envFile;
-  const githubToken = options.githubToken === undefined ? config.specDesignGithubToken : options.githubToken;
+  const githubAppWriteToken = options.githubAppWriteToken === undefined ? config.specDesignGithubAppWriteToken : options.githubAppWriteToken;
   const timeoutMs = options.timeoutMs ?? config.specDesignTimeoutMs;
 
   const requestHostPath = join(options.hostWorkspace, REQUEST_BASENAME);
@@ -197,14 +196,14 @@ export async function runSpecDesignAgent(
     provider,
     envFile,
     containerName: `spec-design-${request.runId}`,
-    githubToken: githubToken || undefined,
+    githubAppWriteToken: githubAppWriteToken || undefined,
   });
   const argv = [...dockerArgs, "spec", "--request", requestContainerPath];
 
   return new Promise((resolvePromise) => {
     // The token reaches the container by environment pass-through, never argv.
     const child = spawn(docker[0], argv, {
-      env: githubToken ? { ...process.env, GITHUB_TOKEN: githubToken } : process.env,
+      env: githubAppWriteToken ? { ...process.env, SPEC_AGENT_GITHUB_TOKEN: githubAppWriteToken } : process.env,
     });
     let stdout = "";
     let stderr = "";
@@ -256,7 +255,7 @@ async function runLocalSpecDesignAgent(
       cwd: options.agentDirectory ?? config.specDesignAgentDirectory,
       env: {
         ...process.env,
-        ...(config.specDesignGithubToken ? { GITHUB_TOKEN: config.specDesignGithubToken } : {}),
+        ...(config.specDesignGithubAppWriteToken ? { SPEC_AGENT_GITHUB_TOKEN: config.specDesignGithubAppWriteToken } : {}),
         GIT_AUTHOR_NAME: "Spec and Design Agent",
         GIT_AUTHOR_EMAIL: "agent@agentic-sdlc.local",
         GIT_COMMITTER_NAME: "Spec and Design Agent",

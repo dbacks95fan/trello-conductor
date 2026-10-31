@@ -105,7 +105,7 @@ test("parses a typed human-record comment", () => {
 test("accepts only a human-approved record bound to the current freeze and committed artifact bytes", async () => {
   const { card, record, fetchFn } = fixture();
   const issues = await validateSpecAcceptanceRecord({
-    card, actorId: "owner-1", record, validator, productConfig, ...expectedArtifacts(record), githubApiBase: "https://api.github.com", githubToken: "", fetchFn,
+    card, actorId: "owner-1", record, validator, productConfig, ...expectedArtifacts(record), githubApiBase: "https://api.github.com", intentBacklogReadToken: "", productRepositoryReadToken: "", fetchFn,
     resolveIntent: async () => ({
       productId: "MF", intentId: "INT-MF-0042", intentVersion: 3, intentCommit, intentContentSha256: intentHash, frozenIntentBytes: intentBytes,
       intentRepository: "example/intent-backlog", intentPath: "products/mealflow/intents/INT-MF-0042/intent.md", policyProfileId: "MF-DEFAULT",
@@ -118,7 +118,7 @@ test("accepts only a human-approved record bound to the current freeze and commi
 test("rejects a record from another actor and a hash-mismatched artifact", async () => {
   const { card, record, fetchFn } = fixture();
   const validationOptions = {
-    card, record, validator, productConfig, ...expectedArtifacts(record), githubApiBase: "https://api.github.com", githubToken: "", fetchFn,
+    card, record, validator, productConfig, ...expectedArtifacts(record), githubApiBase: "https://api.github.com", intentBacklogReadToken: "", productRepositoryReadToken: "", fetchFn,
     resolveIntent: async () => ({
       productId: "MF", intentId: "INT-MF-0042", intentVersion: 3, intentCommit, intentContentSha256: intentHash, frozenIntentBytes: intentBytes,
       intentRepository: "example/intent-backlog", intentPath: "products/mealflow/intents/INT-MF-0042/intent.md", policyProfileId: "MF-DEFAULT",
