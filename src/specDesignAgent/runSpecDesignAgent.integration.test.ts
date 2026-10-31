@@ -66,7 +66,7 @@ function request(workspaceSha: string, baseCommit: string): SpecDesignRequest {
       authorized_by: "Sobe",
       recorded_at: "2026-09-06T09:00:00.000Z",
     },
-    target: { repository: "https://github.com/example/menuapp", baseCommit, branch: "work/INT-MF-0042", workspace: "/work/repository" },
+    target: { repository: "https://github.com/example/mealflow", baseCommit, branch: "work/INT-MF-0042", workspace: "/work/repository" },
     readPaths: ["."],
     writePaths: [".agent/work/INT-MF-0042"],
   };

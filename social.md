@@ -91,17 +91,17 @@ transposed base-image tag: `python:3.12-bookworm-slim` does not exist, it is
 `python:3.12-slim-bookworm`. (The uv builder tag genuinely is `bookworm-slim` —
 astral uses the opposite convention, which is likely how it crept in.)
 
-Ran the image through the orchestrator's real code path against a menuapp clone
+Ran the image through the orchestrator's real code path against a mealflow clone
 with `provider=mock`. Everything on our side worked — mount, safe.directory,
 read-only rootfs, request round-trip, result parsing, routing, TARGET_REPO
 untouched — and the agent got as far as writing `spec.md` before failing:
 
     git add -- .agent/work/INT-MF-0042/{intent.md,spec.md,spec-run.json} -> exit 1
 
-Reproduced in isolation: `menuapp/.gitignore:19` ignores `.agent/`, and plain
+Reproduced in isolation: `mealflow/.gitignore:19` ignores `.agent/`, and plain
 `git add` refuses ignored paths. `git add --force` stages them. The agent uses
 plain `git add`; our `specWorkspace.ts` and the evaluator's `gitHandoff.ts` both
-already force. Left the fix to Sobe — either the agent forces, or menuapp stops
+already force. Left the fix to Sobe — either the agent forces, or mealflow stops
 ignoring `.agent/work/` — because it is a policy call across his repos, unlike
 the Dockerfile tag which had one right answer.
 
