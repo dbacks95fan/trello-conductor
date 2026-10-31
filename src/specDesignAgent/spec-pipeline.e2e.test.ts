@@ -33,7 +33,7 @@ function initTargetRepo(): string {
   git("commit", "-m", "initial");
   // Never contacted in this test; origin only has to be a valid HTTPS remote so
   // the workspace can be retargeted at something the container could reach.
-  git("remote", "add", "origin", "https://github.com/example/menuapp.git");
+  git("remote", "add", "origin", "https://github.com/example/mealflow.git");
   return dir;
 }
 
