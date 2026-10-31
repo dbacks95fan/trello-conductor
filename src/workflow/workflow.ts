@@ -6,21 +6,19 @@ import { routeSpecResult } from "./specRouting.js";
 import { prepareSpecWorkspace, readCommittedWorkspaceFile, verifySpecBranchPublished } from "./specWorkspace.js";
 import { prepareGitEvaluationHandoff } from "../evaluatorAgent/gitHandoff.js";
 import { runRemoteEvaluator } from "../evaluatorAgent/remote.js";
+import { readArtifactRef } from "./humanRecords.js";
 import { commentOnCard, getCard, getWorkflowListId, getWorkflowStageLabel, moveCard, updateCardDescription } from "../trello/client.js";
 import { config } from "../config.js";
 import { isUnderWipLimit } from "./wip.js";
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
-import { stringify } from "yaml";
 import { activeFreezeForCard, readFreezeProjection, writeFreezeProjection, type FreezeTuple } from "./freezeState.js";
 import { frozenArtifactSha256 } from "./specRequestFromCard.js";
 import { createLifecycleValidator } from "../contracts/lifecycle.js";
 import { parse as parseYaml } from "yaml";
 import { validateWorkContractV3 } from "./workContractV3.js";
-import { adaptAcceptedWorkContract } from "./codingContractAdapter.js";
-import type { WorkContract } from "./contractFromCard.js";
 import { loadAcceptedExecutionContract } from "./acceptedExecutionContract.js";
+import { createGitHubAppReadToken } from "../githubApp.js";
 
 const lifecycleValidator = createLifecycleValidator(config.lifecycleSchemaPath);
 
@@ -35,6 +33,7 @@ interface AcceptedExecution {
   acceptance: Record<string, unknown>;
   workspaceRef: string;
   targetCommit: string;
+  freezeActivation: Record<string, unknown>;
 }
 const pendingQueue: AcceptedExecution[] = [];
 const pendingReviewQueue: string[] = [];
@@ -103,9 +102,7 @@ async function processCard(execution: AcceptedExecution): Promise<void> {
   const card = await getCard(cardId);
   console.log(`[trello-orchestrator] Processing card ${card.idShort} "${card.name}"`);
 
-  let contract: WorkContract;
-  let repositoryPath = "";
-  let baseBranch = "";
+  let invocation: Record<string, unknown>;
   try {
     const executionListId = getWorkflowListId("execution");
     if (card.idList !== executionListId) throw new Error("The card no longer resides in Execution.");
@@ -116,12 +113,17 @@ async function processCard(execution: AcceptedExecution): Promise<void> {
       targetCommit: execution.targetCommit,
       workspaceRoot: config.specWorkspaceRoot,
       intentBacklogApiBase: config.intentBacklogApiBase,
-      githubToken: config.githubToken,
+      intentBacklogReadToken: config.intentBacklogReadToken,
+      createProductRepositoryReadToken: (repositoryUrl) => createGitHubAppReadToken({
+        appId: config.orchestratorGithubAppId,
+        installationId: config.orchestratorGithubAppInstallationId,
+        privateKeyFile: config.orchestratorGithubAppPrivateKeyFile,
+        repositoryUrl,
+      }),
+      freezeActivation: execution.freezeActivation,
       validator: lifecycleValidator,
     });
-    contract = loaded.workContract;
-    repositoryPath = loaded.repositoryPath;
-    baseBranch = loaded.baseBranch;
+    invocation = loaded.invocation;
   } catch (err) {
     if (err instanceof Error) {
       await commentOnCard(cardId, `⚠️ Trello Orchestrator could not build a Work Contract:\n\n${err.message}`);
@@ -133,16 +135,23 @@ async function processCard(execution: AcceptedExecution): Promise<void> {
   const workingListId = getWorkflowListId("execution");
   const reviewListId = getWorkflowListId("evaluation");
   if (card.idList !== workingListId) return;
-  await commentOnCard(cardId, `🤖 Coding Agent started (work item \`${contract.work_item}\`).`);
+  const invocationWorkItem = invocation.work_item as Record<string, unknown>;
+  const workItemId = String(invocationWorkItem.intent_id ?? "");
+  await commentOnCard(cardId, `🤖 Coding Agent started (work item \`${workItemId}\`).`);
 
-  const coding = await runCodingAgent(contract, { repoRoot: repositoryPath, baseBranch });
-  if (!coding.evidence) {
-    await commentOnCard(cardId, `❌ Coding Agent produced no parseable output (exit code ${coding.exitCode}). Needs human investigation.`);
+  const coding = await runCodingAgent(invocation, { runtimeEnvFile: config.codingAgentRuntimeEnvFile });
+  if (!coding.stageResult) {
+    await commentOnCard(cardId, `❌ Coding Agent produced no parseable StageResult (exit code ${coding.exitCode}). Needs human investigation.\n\n${coding.rawOutput.slice(-1500)}`);
     return;
   }
 
-  const codingStatus = String(coding.evidence.status ?? "unknown");
-  const codingSummary = String(coding.evidence.summary ?? "(no summary)");
+  const stageValidation = lifecycleValidator.validate("StageResult", coding.stageResult);
+  if (!stageValidation.valid || coding.stageResult.invocation_id !== invocation.invocation_id || coding.stageResult.stage !== "execution") {
+    await commentOnCard(cardId, `❌ Coding Agent StageResult was rejected: ${stageValidation.errors.join("; ") || "its invocation identity did not match."}`);
+    return;
+  }
+  const codingStatus = String(coding.stageResult.status ?? "unknown");
+  const codingSummary = String(coding.stageResult.summary ?? "(no summary)");
   await commentOnCard(cardId, `🤖 Coding Agent finished: **${codingStatus}**\n\n${codingSummary}`);
 
   if (codingStatus !== "candidate_complete") {
@@ -150,27 +159,22 @@ async function processCard(execution: AcceptedExecution): Promise<void> {
     return;
   }
 
-  const workItem = String(coding.evidence.workItem ?? contract.work_item);
-  const runId = String(coding.evidence.runId ?? "");
-  const worktree = coding.evidence.worktree as { path?: string; branch?: string } | undefined;
-  if (!runId) {
-    await commentOnCard(cardId, "❌ Coding Agent did not provide a run ID. Independent evaluation cannot be started.");
+  if (!coding.evidencePackage) {
+    await commentOnCard(cardId, "❌ Coding Agent did not provide the canonical Evidence Package required for Evaluation.");
     return;
   }
-  if (!worktree?.path || !worktree.branch) {
-    await commentOnCard(cardId, "❌ Coding Agent did not provide a candidate worktree path and branch. Independent evaluation cannot be started.");
+  const evidenceValidation = lifecycleValidator.validate("EvidencePackage", coding.evidencePackage);
+  if (!evidenceValidation.valid) {
+    await commentOnCard(cardId, `❌ Coding Agent Evidence Package was rejected: ${evidenceValidation.errors.join("; ")}`);
     return;
   }
   const handoff = await prepareGitEvaluationHandoff({
-    workItem,
-    worktreePath: worktree.path,
-    branch: String(worktree.branch ?? ""),
-    intentPath: contract.intent.path,
-    contractText: stringify(contract),
-    evidencePath: join(repositoryPath, ".agent", "evidence", `${workItem}-${runId}.json`),
+    invocation,
+    stageResult: coding.stageResult,
+    evidencePackage: coding.evidencePackage,
   });
   const handoffComment = JSON.stringify(handoff);
-  await commentOnCard(cardId, `${handoffMarker}${handoffComment} -->\n🔎 Independent evaluation is ready from Git revision \`${handoff.revision}\`. Moving this card to ${getWorkflowStageLabel("evaluation")} starts the Evaluator Agent.`);
+  await commentOnCard(cardId, `${handoffMarker}${handoffComment} -->\n🔎 Independent evaluation is ready from candidate revision \`${handoff.candidateRevision}\`. Moving this card to ${getWorkflowStageLabel("evaluation")} starts the Evaluator Agent.`);
   await moveCard(cardId, reviewListId);
 }
 
@@ -183,7 +187,7 @@ async function evaluateCard(cardId: string): Promise<void> {
     await commentOnCard(cardId, `⚠️ ${getWorkflowStageLabel("evaluation")} was entered without an evaluator handoff. No evaluator run was started.`);
     return;
   }
-  let handoff: { repositoryUrl?: string; revision?: string; intentPath?: string; contractPath?: string; evidencePath?: string };
+  let handoff: Record<string, unknown>;
   try {
     const payload = handoffComment.data.text.slice(handoffMarker.length).split(" -->", 1)[0];
     handoff = JSON.parse(payload);
@@ -191,31 +195,61 @@ async function evaluateCard(cardId: string): Promise<void> {
     await commentOnCard(cardId, "⚠️ The evaluator handoff metadata is invalid. No evaluator run was started.");
     return;
   }
-  if (!handoff.repositoryUrl || !handoff.revision || !handoff.intentPath || !handoff.contractPath || !handoff.evidencePath) {
+  const workItem = handoff.workItem as Record<string, unknown> | undefined;
+  const intentRef = handoff.intentRef as Record<string, unknown> | undefined;
+  const contractRef = handoff.contractRef as Record<string, unknown> | undefined;
+  const evidenceRef = handoff.evidenceRef as Record<string, unknown> | undefined;
+  if (!handoff.repositoryUrl || !handoff.branch || !handoff.candidateRevision || !handoff.branchRevision || !workItem || !intentRef || !contractRef || !evidenceRef || !handoff.packagePath) {
     await commentOnCard(cardId, "⚠️ The evaluator handoff is incomplete. No evaluator run was started.");
     return;
   }
   await commentOnCard(cardId, `🔎 Independent Evaluator Agent started because the card entered ${getWorkflowStageLabel("evaluation")}.`);
+
+  let productRepositoryReadToken: string;
+  try {
+    productRepositoryReadToken = await createGitHubAppReadToken({
+      appId: config.orchestratorGithubAppId,
+      installationId: config.orchestratorGithubAppInstallationId,
+      privateKeyFile: config.orchestratorGithubAppPrivateKeyFile,
+      repositoryUrl: String(handoff.repositoryUrl),
+    });
+  } catch (err) {
+    await commentOnCard(cardId, `❌ Orchestrator could not mint a product-repository read token: ${err instanceof Error ? err.message : String(err)}. Card remains in ${getWorkflowStageLabel("evaluation")}.`);
+    return;
+  }
 
   let evaluated;
   try {
     evaluated = await runRemoteEvaluator({
       endpoint: `${config.evaluatorApiUrl.replace(/\/$/, "")}/evaluations`,
       token: config.evaluatorApiToken,
-      repositoryUrl: handoff.repositoryUrl,
-      revision: handoff.revision,
-      workItem: String(card.idShort),
-      intentPath: handoff.intentPath,
-      contractPath: handoff.contractPath,
-      evidencePath: handoff.evidencePath,
+      repositoryUrl: String(handoff.repositoryUrl),
+      branch: String(handoff.branch),
+      revision: String(handoff.candidateRevision),
+      branchRevision: String(handoff.branchRevision),
+      workItem,
+      intentRef,
+      contractRef,
+      evidenceRef,
+      intentText: await readArtifactRef(intentRef, config.intentBacklogApiBase, productRepositoryReadToken),
+      contractText: await readArtifactRef(contractRef, config.intentBacklogApiBase, productRepositoryReadToken),
+      evidenceText: await readArtifactRef(evidenceRef, config.intentBacklogApiBase, productRepositoryReadToken),
+      packagePath: String(handoff.packagePath),
     });
   } catch (err) {
     await commentOnCard(cardId, `❌ Evaluator could not start: ${err instanceof Error ? err.message : String(err)}. Card remains in ${getWorkflowStageLabel("evaluation")}.`);
     return;
   }
 
-  if (!evaluated.evaluation) {
+  if (!evaluated.evaluation || !evaluated.evaluationPackage) {
     await commentOnCard(cardId, `❌ Evaluator produced no parseable result (exit code ${evaluated.exitCode}). Card remains in ${getWorkflowStageLabel("evaluation")} for investigation.\n\n\`\`\`\n${evaluated.rawOutput.slice(-1500)}\n\`\`\``);
+    return;
+  }
+  const evaluationPackage = evaluated.evaluationPackage;
+  if (evaluationPackage.repositoryUrl.replace(/\.git$/i, "") !== String(handoff.repositoryUrl).replace(/\.git$/i, "") ||
+      evaluationPackage.branch !== String(handoff.branch) || evaluationPackage.candidateRevision !== String(handoff.candidateRevision) ||
+      evaluationPackage.path !== String(handoff.packagePath) || !/^[0-9a-f]{40}$/i.test(evaluationPackage.packageRevision) || !/^[0-9a-f]{64}$/i.test(evaluationPackage.sha256)) {
+    await commentOnCard(cardId, "Evaluator returned an Evaluation Package reference that does not match this candidate handoff. The card remains in Evaluation for investigation.");
     return;
   }
 
@@ -241,6 +275,7 @@ async function evaluateCard(cardId: string): Promise<void> {
     comment += `\n\n**If no decision is made:** ${decisionBrief.consequenceOfNoDecision ?? "Work remains blocked."}`;
   }
   await commentOnCard(cardId, comment);
+  await commentOnCard(cardId, `Evaluation Package published at \`${evaluationPackage.path}\` on \`${evaluationPackage.branch}\` (package commit \`${evaluationPackage.packageRevision}\`, candidate \`${evaluationPackage.candidateRevision}\`, SHA-256 \`${evaluationPackage.sha256}\`).`);
 
   if (status === "pass") {
     const humanApprovalListId = getWorkflowListId("humanApproval");
@@ -276,7 +311,13 @@ async function resolveTargetBaseCommit(repositoryUrl: string): Promise<string> {
     "X-GitHub-Api-Version": "2022-11-28",
     "User-Agent": "trello-orchestrator",
   };
-  if (config.githubToken) headers.Authorization = `Bearer ${config.githubToken}`;
+  const productRepositoryReadToken = await createGitHubAppReadToken({
+    appId: config.orchestratorGithubAppId,
+    installationId: config.orchestratorGithubAppInstallationId,
+    privateKeyFile: config.orchestratorGithubAppPrivateKeyFile,
+    repositoryUrl,
+  });
+  headers.Authorization = `Bearer ${productRepositoryReadToken}`;
   const repositoryApi = `${config.intentBacklogApiBase.replace(/\/$/, "")}/repos/${match[1]}/${match[2]}`;
   const repositoryResponse = await fetch(repositoryApi, { headers });
   if (!repositoryResponse.ok) throw new Error(`GitHub returned HTTP ${repositoryResponse.status} while resolving the product repository default branch.`);
@@ -311,7 +352,7 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
   try {
     resolved = await resolveSpecRequest(card, {
       githubApiBase: config.intentBacklogApiBase,
-      githubToken: config.githubToken,
+      intentBacklogReadToken: config.intentBacklogReadToken,
       approvedBy: activeFreeze.tuple.authorizedBy,
       approvedAt: activeFreeze.tuple.frozenAt,
     });
@@ -525,7 +566,13 @@ async function runSpecAndDesign(cardId: string, approval: MoveApproval): Promise
   await commentOnCard(cardId, route.comment);
 
   if (route.comment.includes("spec ready for human review")) {
-    const published = await verifySpecBranchPublished({ ...workspace, path: workspace.repositoryPath }, config.githubToken);
+    const productRepositoryReadToken = await createGitHubAppReadToken({
+      appId: config.orchestratorGithubAppId,
+      installationId: config.orchestratorGithubAppInstallationId,
+      privateKeyFile: config.orchestratorGithubAppPrivateKeyFile,
+      repositoryUrl: workspace.remoteUrl,
+    });
+    const published = await verifySpecBranchPublished({ ...workspace, path: workspace.repositoryPath }, productRepositoryReadToken);
     await commentOnCard(
       cardId,
       published.pushed
@@ -545,7 +592,7 @@ export async function handleCardPrioritized(cardId: string, approval: MoveApprov
   try {
     const resolved = await resolveSpecRequest(card, {
       githubApiBase: config.intentBacklogApiBase,
-      githubToken: config.githubToken,
+      intentBacklogReadToken: config.intentBacklogReadToken,
       approvedBy: approval.approvedBy,
       approvedAt: approval.approvedAt,
     });
@@ -618,8 +665,8 @@ export async function handleCardFreezeRevocation(cardId: string, revokedBy: stri
   await commentOnCard(cardId, `🔓 Prioritized freeze revoked because the card returned to ${card.idList === getWorkflowListId("newIdeas") ? getWorkflowStageLabel("newIdeas") : getWorkflowStageLabel("backlog")}.\n\n${JSON.stringify(revoked, null, 2)}`);
 }
 
-export function handleCardReadyForAgent(cardId: string, acceptance: Record<string, unknown>, workspaceRef: string, targetCommit: string): void {
-  enqueueCard({ cardId, acceptance, workspaceRef, targetCommit });
+export function handleCardReadyForAgent(cardId: string, acceptance: Record<string, unknown>, workspaceRef: string, targetCommit: string, freezeActivation: Record<string, unknown>): void {
+  enqueueCard({ cardId, acceptance, workspaceRef, targetCommit, freezeActivation });
 }
 
 export function handleCardReviewForAgent(cardId: string): void {

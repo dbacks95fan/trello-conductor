@@ -1,65 +1,60 @@
-// ABOUTME: Commits and pushes immutable evaluator artifacts to the candidate branch.
-import { execFile } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
-import { promisify } from "node:util";
-import { join, relative, resolve } from "node:path";
-
-const execFileAsync = promisify(execFile);
+// ABOUTME: Builds a read-only handoff from accepted stage records for the Evaluator.
 
 export interface GitEvaluationHandoffInput {
-  workItem: string;
-  worktreePath: string;
-  branch: string;
-  intentPath: string;
-  contractText: string;
-  evidencePath: string;
+  invocation: Record<string, unknown>;
+  stageResult: Record<string, unknown>;
+  evidencePackage: Record<string, unknown>;
 }
 
 export interface GitEvaluationHandoff {
+  workItem: Record<string, unknown>;
   repositoryUrl: string;
-  revision: string;
+  branch: string;
+  candidateRevision: string;
+  branchRevision: string;
   intentPath: string;
-  contractPath: string;
-  evidencePath: string;
+  intentRef: Record<string, unknown>;
+  contractRef: Record<string, unknown>;
+  evidenceRef: Record<string, unknown>;
+  packagePath: string;
 }
 
-// ABOUTME: Runs Git without a shell so work-item data cannot alter the command structure.
-async function git(args: string[], cwd: string): Promise<string> {
-  const { stdout } = await execFileAsync("git", args, { cwd, windowsHide: true });
-  return stdout.trim();
-}
-
-// ABOUTME: Ensures a path remains a portable repository-relative artifact reference.
-function repositoryPath(path: string): string {
-  if (!path || path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path) || path.split(/[\\/]+/).includes("..")) {
-    throw new Error("Evaluator artifact paths must be repository-relative and may not escape the candidate branch");
-  }
-  return path.replaceAll("\\", "/");
-}
-
-// ABOUTME: Stores the exact evaluation inputs with the candidate so a remote evaluator can reproduce the run.
+// ABOUTME: Leaves Git writes to stage agents and returns only immutable artifact references.
 export async function prepareGitEvaluationHandoff(input: GitEvaluationHandoffInput): Promise<GitEvaluationHandoff> {
-  const intentPath = repositoryPath(input.intentPath);
-  const status = await git(["status", "--porcelain", "--untracked-files=all"], input.worktreePath);
-  if (status) throw new Error("Candidate branch has uncommitted changes. The evaluator requires a clean, committed Git revision.");
-
-  const contractPath = `.agent/work/${input.workItem}/contract.yaml`;
-  const evidencePath = `.agent/evidence/${input.workItem}-${input.evidencePath}`;
-  const evidenceSource = resolve(input.evidencePath);
-  const worktree = resolve(input.worktreePath);
-  if (!relative(worktree, evidenceSource)) throw new Error("Evaluator evidence must be stored outside the candidate worktree before it is copied into the branch");
-
-  await mkdir(join(worktree, ".agent", "work", input.workItem), { recursive: true });
-  await mkdir(join(worktree, ".agent", "evidence"), { recursive: true });
-  const evidence = await (await import("node:fs/promises")).readFile(evidenceSource, "utf8");
-  await writeFile(join(worktree, contractPath), input.contractText, "utf8");
-  await writeFile(join(worktree, evidencePath), evidence, "utf8");
-  await git(["add", "--force", contractPath, evidencePath], worktree);
-  await git(["commit", "-m", `chore(agent): record evaluation handoff for ${input.workItem}`], worktree);
-
-  const revision = await git(["rev-parse", "HEAD"], worktree);
-  const repositoryUrl = await git(["config", "--get", "remote.origin.url"], worktree);
-  if (!repositoryUrl.startsWith("https://")) throw new Error("Candidate remote.origin.url must use HTTPS so the NAS evaluator can retrieve the committed revision");
-  await git(["push", "--set-upstream", "origin", input.branch], worktree);
-  return { repositoryUrl, revision, intentPath, contractPath, evidencePath };
+  const invocation = input.invocation;
+  const stageResult = input.stageResult;
+  const evidencePackage = input.evidencePackage;
+  const workItem = stageResult.work_item as Record<string, unknown> | undefined;
+  const target = invocation.target as Record<string, unknown> | undefined;
+  const candidate = stageResult.candidate as Record<string, unknown> | undefined;
+  const freeze = invocation.freeze_activation as Record<string, unknown> | undefined;
+  const freezeIntent = freeze?.intent as Record<string, unknown> | undefined;
+  const outputs = stageResult.output_artifacts as Array<Record<string, unknown>> | undefined;
+  const evidenceRef = outputs?.find((artifact) => String(artifact.path).includes("/evidence-package/"));
+  const inputs = invocation.input_artifacts as Array<Record<string, unknown>> | undefined;
+  const contractRef = inputs?.find((artifact) => String(artifact.path).endsWith("/work-contract.yaml"));
+  const repositoryUrl = String(target?.repository ?? "").replace(/\.git$/i, "");
+  const intentId = String(workItem?.intent_id ?? "");
+  const intentPath = `.agent/work/${intentId}/intent.md`;
+  const contract = evidencePackage.input_artifacts as Array<Record<string, unknown>> | undefined;
+  if (!workItem || !target || !candidate || !freezeIntent || !evidenceRef || !contractRef || !contract?.some((ref) => ref.path === contractRef.path)) {
+    throw new Error("Coding Agent output is missing the candidate or immutable artifact references required by Evaluation.");
+  }
+  if (!/^https:\/\/github\.com\/[^/]+\/[^/]+$/i.test(repositoryUrl)) throw new Error("The candidate repository must be an HTTPS GitHub repository.");
+  if (candidate.repository !== repositoryUrl || evidenceRef.repository !== repositoryUrl || contractRef.repository !== repositoryUrl) {
+    throw new Error("The candidate and Evaluation inputs must reference the same product repository.");
+  }
+  if (evidenceRef.commit_sha === candidate.commit_sha) throw new Error("The Evidence Package must be committed after the immutable candidate.");
+  return {
+    workItem,
+    repositoryUrl,
+    branch: String(invocation.workspace_ref ?? ""),
+    candidateRevision: String(candidate.commit_sha ?? ""),
+    branchRevision: String(evidenceRef.commit_sha ?? ""),
+    intentPath,
+    intentRef: { repository: repositoryUrl, commit_sha: candidate.commit_sha, path: intentPath, sha256: freezeIntent.sha256 },
+    contractRef,
+    evidenceRef,
+    packagePath: `.agent/work/${intentId}/evaluation-package/evaluation.json`,
+  };
 }

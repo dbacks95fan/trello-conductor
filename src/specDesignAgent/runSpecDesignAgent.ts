@@ -1,7 +1,7 @@
 // ABOUTME: Runs the Spec & Design Agent as a one-shot Docker container and captures its one JSON result.
 import { spawn } from "node:child_process";
 import { writeFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { config } from "../config.js";
 
 /** The bounded request the Spec & Design Agent consumes.
@@ -65,8 +65,6 @@ export interface DockerRunSpec {
   provider: string;
   envFile?: string | null;
   containerName?: string;
-  /** When set, git inside the container can authenticate to GitHub. */
-  githubToken?: string;
 }
 
 /** Git refuses to operate on a bind-mounted repository whose owner differs from
@@ -82,16 +80,6 @@ const GIT_ENV: string[] = [
   "-e", "GIT_CONFIG_VALUE_1=agent@agentic-sdlc.local",
   "-e", "GIT_CONFIG_KEY_2=user.name",
   "-e", "GIT_CONFIG_VALUE_2=Spec and Design Agent",
-];
-
-/** Lets git in the container authenticate to GitHub. The helper resolves
- *  $GITHUB_TOKEN inside the container at call time, and the token itself is
- *  passed by environment pass-through (`-e GITHUB_TOKEN`, no `=value`) so it
- *  never appears in argv, in `docker inspect`, or in the process list. */
-const GIT_CREDENTIAL_ENV: string[] = [
-  "-e", "GIT_CONFIG_KEY_3=credential.helper",
-  "-e", 'GIT_CONFIG_VALUE_3=!f(){ echo username=x-access-token; echo "password=$GITHUB_TOKEN"; };f',
-  "-e", "GITHUB_TOKEN",
 ];
 
 /** Builds the `docker run` argv up to and including the image. Mirrors the
@@ -112,9 +100,8 @@ export function buildDockerArgs(spec: DockerRunSpec): string[] {
     "-e",
     `SPEC_AGENT_PROVIDER=${spec.provider}`,
     "-e",
-    `GIT_CONFIG_COUNT=${spec.githubToken ? 4 : 3}`,
+    "GIT_CONFIG_COUNT=3",
     ...GIT_ENV,
-    ...(spec.githubToken ? GIT_CREDENTIAL_ENV : []),
     "--security-opt",
     "no-new-privileges:true",
     "--cap-drop",
@@ -158,8 +145,6 @@ export interface RunSpecDesignAgentOptions {
   provider?: string;
   /** `null` omits `--env-file` entirely; omitted falls back to configuration. */
   envFile?: string | null;
-  /** `null` withholds GitHub credentials; omitted falls back to configuration. */
-  githubToken?: string | null;
   timeoutMs?: number;
   runtime?: "docker" | "local";
   localCommand?: string[];
@@ -181,7 +166,6 @@ export async function runSpecDesignAgent(
   const docker = options.docker ?? [config.specDesignDockerBin];
   const image = options.image ?? config.specDesignImage;
   const envFile = options.envFile === undefined ? config.specDesignRuntimeEnvFile : options.envFile;
-  const githubToken = options.githubToken === undefined ? config.specDesignGithubToken : options.githubToken;
   const timeoutMs = options.timeoutMs ?? config.specDesignTimeoutMs;
 
   const requestHostPath = join(options.hostWorkspace, REQUEST_BASENAME);
@@ -197,15 +181,11 @@ export async function runSpecDesignAgent(
     provider,
     envFile,
     containerName: `spec-design-${request.runId}`,
-    githubToken: githubToken || undefined,
   });
   const argv = [...dockerArgs, "spec", "--request", requestContainerPath];
 
   return new Promise((resolvePromise) => {
-    // The token reaches the container by environment pass-through, never argv.
-    const child = spawn(docker[0], argv, {
-      env: githubToken ? { ...process.env, GITHUB_TOKEN: githubToken } : process.env,
-    });
+    const child = spawn(docker[0], argv, { env: process.env });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -250,13 +230,14 @@ async function runLocalSpecDesignAgent(
   const requestPath = join(hostWorkspace, REQUEST_BASENAME);
   await writeFile(requestPath, JSON.stringify(request, null, 2), "utf8");
   const command = options.localCommand ?? [config.specDesignUvBin];
-  const args = [...command.slice(1), "run", "spec-design-agent", "spec", "--request", requestPath, "--provider", provider];
+  const runtimeEnvFile = options.envFile === undefined ? config.specDesignRuntimeEnvFile : options.envFile;
+  const uvEnvArgs = runtimeEnvFile && /^uv(?:\.exe)?$/i.test(basename(command[0])) ? ["--env-file", runtimeEnvFile] : [];
+  const args = [...command.slice(1), "run", ...uvEnvArgs, "spec-design-agent", "spec", "--request", requestPath, "--provider", provider];
   return new Promise((resolvePromise) => {
     const child = spawn(command[0], args, {
       cwd: options.agentDirectory ?? config.specDesignAgentDirectory,
       env: {
         ...process.env,
-        ...(config.specDesignGithubToken ? { GITHUB_TOKEN: config.specDesignGithubToken } : {}),
         GIT_AUTHOR_NAME: "Spec and Design Agent",
         GIT_AUTHOR_EMAIL: "agent@agentic-sdlc.local",
         GIT_COMMITTER_NAME: "Spec and Design Agent",

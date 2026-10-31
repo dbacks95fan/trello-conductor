@@ -115,18 +115,18 @@ usable remote. So this was never a networking change.
   instead of removing it. Cloning from the local path stays fast and credential
   free, but the clone now carries a remote that resolves identically on the host
   and in the container. Refuses a target repo whose origin is not HTTPS.
-- The container gets a `credential.helper` via `GIT_CONFIG_KEY_3`, with the token
-  passed by **environment pass-through** (`-e GITHUB_TOKEN`, no `=value`) so it
-  never lands in argv, `docker inspect`, or the process list. Verified with a
-  bogus token: GitHub answers "Invalid username or token" (credentials sent and
-  rejected) rather than "could not read Username" (none sent).
-- **The Orchestrator pushes, not the agent.** `AGENT_ROLES.md` grants the Spec &
-  Design Agent no write authority over the product repository, and the evaluator
-  handoff already makes the Orchestrator the component that publishes a branch. The
-  agent's own contract is commit-only, so without this step `spec.md` would never
-  leave the host and Design Review would have nothing to open.
-- `SPEC_DESIGN_GITHUB_TOKEN` lets the container hold a narrower read-only
-  credential than the write-capable one the push uses.
+- The container receives the product-repository GitHub App installation token
+  through environment pass-through as `SPEC_AGENT_GITHUB_TOKEN`. The Spec & Design
+  Agent creates and pushes its branch, so this role needs write access to its
+  assigned product repository. The value is not in Docker command arguments, but
+  Docker daemon users can inspect the container environment, so daemon access must
+  be restricted.
+- The Orchestrator separately uses `INTENT_BACKLOG_READ_TOKEN` for the private
+  intent-backlog repository and a read-only GitHub App token for product-repository
+  validation. It does not reuse either token for the agent's branch writes.
+- The Evaluator's publisher uses its own GitHub App write token to add the
+  Evaluation Package to the candidate branch. The Evaluator itself remains
+  read-only with respect to candidate code.
 
 A test caught a UX defect worth noting: with no origin at all, `git config --get`
 exits non-zero, so the cryptic "Command failed" surfaced instead of the

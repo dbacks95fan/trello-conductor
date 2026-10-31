@@ -86,7 +86,7 @@ async function runPipeline(targetRepo: string, workspaceRoot: string) {
   process.env.FAKE_DOCKER_TARGET_REPO = targetRepo;
   const resolved = await resolveSpecRequest(card(), {
     githubApiBase: "https://api.github.com",
-    githubToken: "",
+    intentBacklogReadToken: "",
     approvedBy: "Sobe",
     approvedAt: "2026-09-06T09:00:00.000Z",
     targetRepositoryUrl: "https://github.com/example/mealflow",

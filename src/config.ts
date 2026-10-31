@@ -31,6 +31,8 @@ export const config = {
     process.env.AGENTIC_SDLC_SCHEMA_PATH ?? resolve(targetRepo, "..", "agentic-sdlc", "schemas", "lifecycle-contracts.schema.json"),
   wipLimit: Number(process.env.WIP_LIMIT ?? "1"),
   codingAgentCli: required("CODING_AGENT_CLI"),
+  codingAgentRuntimeEnvFile:
+    process.env.CODING_AGENT_RUNTIME_ENV ?? resolve(targetRepo, "..", ".config", "coding-agent", "runtime.env"),
   // The Spec & Design Agent runs as a one-shot Docker container on this host.
   // The image is built and deployed separately (spec-design-agent/compose.yaml);
   // the orchestrator only invokes `docker run` against it.
@@ -41,15 +43,16 @@ export const config = {
   specDesignRuntime: choice("SPEC_DESIGN_RUNTIME", ["docker", "local"] as const, "docker"),
   specDesignAgentDirectory: process.env.SPEC_DESIGN_AGENT_DIR ?? resolve(targetRepo, "..", "spec-design-agent"),
   specDesignUvBin: process.env.SPEC_DESIGN_UV ?? "uv",
-  // env-file passed to the container for provider credentials (ANTHROPIC_API_KEY
-  // etc.). Defaults to the spec-design-agent repo's own .runtime.env.
+  // Agent-specific env-file passed directly to the Spec & Design runtime.
   specDesignRuntimeEnvFile:
-    process.env.SPEC_DESIGN_AGENT_RUNTIME_ENV ?? resolve(targetRepo, "..", "spec-design-agent", ".runtime.env"),
+    process.env.SPEC_DESIGN_AGENT_RUNTIME_ENV ?? resolve(targetRepo, "..", ".config", "spec-design-agent", "runtime.env"),
   specDesignTimeoutMs: Number(process.env.SPEC_DESIGN_AGENT_TIMEOUT_MS ?? "900000"),
-  // Token git inside the container uses to reach GitHub. Defaults to the
-  // orchestrator's own token; set SPEC_DESIGN_GITHUB_TOKEN to hand the agent a
-  // narrower, read-only credential than the one the Orchestrator pushes with.
-  specDesignGithubToken: process.env.SPEC_DESIGN_GITHUB_TOKEN ?? process.env.GITHUB_TOKEN ?? "",
+  // Intent-backlog uses its dedicated access token. Product repositories use
+  // short-lived, repository-scoped GitHub App installation tokens.
+  intentBacklogReadToken: process.env.INTENT_BACKLOG_READ_TOKEN ?? "",
+  orchestratorGithubAppId: process.env.ORCHESTRATOR_GITHUB_APP_ID ?? "",
+  orchestratorGithubAppInstallationId: process.env.ORCHESTRATOR_GITHUB_APP_INSTALLATION_ID ?? "",
+  orchestratorGithubAppPrivateKeyFile: process.env.ORCHESTRATOR_GITHUB_APP_PRIVATE_KEY_FILE ?? "",
   evaluatorApiUrl: required("EVALUATOR_API_URL"),
   evaluatorApiToken: required("EVALUATOR_API_TOKEN"),
   targetRepo,
@@ -57,7 +60,6 @@ export const config = {
   // into the container at /work.
   specWorkspaceRoot: process.env.SPEC_WORKSPACE_ROOT ?? resolve(targetRepo, "..", "agentic-sdlc-workspaces"),
   intentBacklogApiBase: process.env.INTENT_BACKLOG_API_BASE ?? "https://api.github.com",
-  githubToken: process.env.GITHUB_TOKEN ?? "",
   callbackUrl: required("CALLBACK_URL"),
   port: Number(process.env.PORT ?? "8787"),
 };

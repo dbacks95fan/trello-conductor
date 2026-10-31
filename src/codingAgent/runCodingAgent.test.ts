@@ -5,30 +5,19 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { WorkContract } from "../workflow/contractFromCard.js";
 import { runCodingAgent } from "./runCodingAgent.js";
 
-test("runs the Coding Agent against the accepted repository and base branch", async () => {
+test("passes a StageInvocation to the Coding Agent and parses its StageResult", async () => {
   const directory = mkdtempSync(join(tmpdir(), "orchestrator-coding-adapter-"));
   try {
     const cli = join(directory, "fake-coding-agent.cjs");
-    writeFileSync(cli, "process.stdout.write(JSON.stringify({ args: process.argv.slice(2) }));\n", "utf8");
-    const contract: WorkContract = {
-      schema_version: 2,
-      work_item: "INT-MF-0042-v3",
-      objective: "Plan meals weekly.",
-      acceptance_criteria: { AC1: "Save a weekly plan." },
-      required_validation: ["build"],
-      intent: { path: ".agent/work/INT-MF-0042/intent.md", revision: "a".repeat(40), sha256: "b".repeat(64), reviewUrl: "https://github.com/example/mealflow/blob/main/spec.md", status: "Accepted", acceptedBy: "owner-1", acceptedAt: "2026-10-27T12:00:00Z" },
-      board: { provider: "trello", workItemId: "card-1", workItemUrl: "https://trello.com/c/abc", workItemType: "Feature" },
-    };
-    const repoRoot = join(directory, "product-repo");
-    const result = await runCodingAgent(contract, { repoRoot, baseBranch: "work/INT-MF-0042", cliPath: cli });
+    writeFileSync(cli, "const fs=require('node:fs');const input=JSON.parse(fs.readFileSync(process.argv.at(-1),'utf8'));process.stdout.write(JSON.stringify({stage_result:{schema_version:'1.0',invocation_id:input.invocation_id,stage:input.stage,status:'candidate_complete',work_item:input.work_item,output_artifacts:[],candidate:{repository:input.target.repository,commit_sha:'a'.repeat(40)}},evidence_package:{schema_version:'1.0'},diagnostics:{}}));\n", "utf8");
+    const invocation = { invocation_id: "invocation-1", stage: "execution", work_item: { intent_id: "INT-MF-0042" }, target: { repository: "https://github.com/example/mealflow" } };
+    const result = await runCodingAgent(invocation, { cliPath: cli, runtimeEnvFile: null });
     assert.equal(result.exitCode, 0);
-    const output = result.evidence as { args: string[] };
-    assert.deepEqual(output.args.slice(0, 2), ["run", "--contract"]);
-    assert.deepEqual(output.args.slice(-4), ["--repo", repoRoot, "--base-branch", "work/INT-MF-0042"]);
-    assert.ok(result.contractText.includes("schema_version: 2"));
+    assert.equal(result.stageResult?.invocation_id, "invocation-1");
+    assert.equal(result.stageResult?.status, "candidate_complete");
+    assert.ok(result.evidencePackage);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
